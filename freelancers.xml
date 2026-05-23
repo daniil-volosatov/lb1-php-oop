@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<users>
+  <user>
+    <name>Іван Фрилансер</name>
+    <role>Дизайнер</role>
+  </user>
+  <user>
+    <name>Олена Кодер</name>
+    <role>Програміст</role>
+  </user>
+</users>
