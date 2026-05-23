@@ -1,6 +1,11 @@
 <?php
-// Підключаємо наш новий клас для БД з ЛБ-2
+// Підключаємо наші файли
 require_once 'FreelanceDB.php';
+require_once 'Validator.php';
+
+// Використовуємо простори імен
+use App\Database\FreelanceDB;
+use App\Utils\Validator;
 
 class WebPage {
     protected $title;
