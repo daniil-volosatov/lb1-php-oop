@@ -1,32 +1,58 @@
 <?php
-// 9. Оголошення простору імен
 namespace App\Database;
 
 use PDO;
 use PDOException;
 
-class FreelanceDB {
+
+interface DatabaseAdapter {
+    public function connect();
+}
+
+class SqliteAdapter implements DatabaseAdapter {
+    private $filename;
+    public function __construct($filename = 'freelance.sqlite') {
+        $this->filename = $filename;
+    }
+    public function connect() {
+        $pdo = new PDO("sqlite:" . $this->filename);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        return $pdo;
+    }
+}
+
+class MongoAdapter implements DatabaseAdapter {
+    public function connect() {
+        // Заглушка для демонстрації можливості підключення іншої БД
+        return "Connected to MongoDB";
+    }
+}
+
+
+interface DatabaseInterface {
+    public function getAllServices();
+    public function addService($name, $price);
+}
+
+class FreelanceDB implements DatabaseInterface {
     private $pdo;
 
-    public function __construct($filename = 'freelance.sqlite') {
+    // Клас тепер приймає Адаптер
+    public function __construct(DatabaseAdapter $adapter) {
         try {
-            // 1. З'єднання за допомогою PDO
-            $this->pdo = new PDO("sqlite:" . $filename);
-            $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $this->pdo = $adapter->connect();
             
-            // 2 & 5. Транзакція в конструкторі
-            $this->pdo->beginTransaction();
-            $this->createTables();
-            $this->seedData();
-            $this->pdo->commit(); // Фіксуємо зміни
-            
+            if ($this->pdo instanceof PDO) {
+                $this->pdo->beginTransaction();
+                $this->createTables();
+                $this->seedData();
+                $this->pdo->commit(); 
+            }
         } catch (PDOException $e) {
-            // Скасовуємо транзакцію у разі помилки
             if ($this->pdo && $this->pdo->inTransaction()) {
                 $this->pdo->rollBack(); 
             }
-            // 4 & 5. Відстеження помилок та повідомлення в браузер
-            die("Неможливо створити базу даних. Помилка: " . $e->getMessage() . " | Код помилки: " . $e->getCode());
+            die("Неможливо створити БД. Помилка: " . $e->getMessage());
         }
     }
 
@@ -39,7 +65,6 @@ class FreelanceDB {
         $this->pdo->exec($query);
     }
 
-    // Заповнення початковими даними, якщо база порожня
     private function seedData() {
         $stmt = $this->pdo->query("SELECT COUNT(*) FROM services");
         if ($stmt->fetchColumn() == 0) {
@@ -48,7 +73,6 @@ class FreelanceDB {
                 ['Дизайн логотипу', 1500],
                 ['Налаштування реклами', 2000]
             ];
-            // 3. Повторювані вставки з використанням підготовлених запитів
             $insertStmt = $this->pdo->prepare("INSERT INTO services (name, price) VALUES (?, ?)");
             foreach ($services as $service) {
                 $insertStmt->execute([$service[0], $service[1]]);
@@ -57,15 +81,42 @@ class FreelanceDB {
     }
 
     public function getAllServices() {
+        if (!$this->pdo instanceof PDO) return [];
         try {
             $stmt = $this->pdo->query("SELECT * FROM services");
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
-            // 4. Використання errorInfo
-            $errorInfo = $this->pdo->errorInfo();
-            echo "Помилка вибірки: " . $errorInfo[2];
             return [];
         }
+    }
+
+    public function addService($name, $price) {
+        if (!$this->pdo instanceof PDO) return false;
+        $stmt = $this->pdo->prepare("INSERT INTO services (name, price) VALUES (?, ?)");
+        return $stmt->execute([$name, $price]);
+    }
+}
+
+// ---------------------------------------------------------
+// ПАТЕРН: DECORATOR (Декоратор) - Вимога 6
+// ---------------------------------------------------------
+class LoggerDecorator implements DatabaseInterface {
+    protected $db;
+    
+    public function __construct(DatabaseInterface $db) {
+        $this->db = $db;
+    }
+    
+    public function getAllServices() {
+        // Логування перед дією
+        error_log("[LOG] Запит на отримання всіх послуг з БД");
+        return $this->db->getAllServices();
+    }
+    
+    public function addService($name, $price) {
+        // Логування перед записом до БД
+        error_log("[LOG] Спроба запису моделі: {$name} - {$price} грн");
+        return $this->db->addService($name, $price);
     }
 }
 ?>
