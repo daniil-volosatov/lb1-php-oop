@@ -39,6 +39,10 @@ class DiscountPriceStrategy implements PriceStrategy {
 class WebPage {
     protected $title;
     public function __construct($title) { $this->title = $title; }
+
+    protected function e($value) {
+        return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+    }
     
     public function renderHeader() {
         // Зверни увагу! Посилання тепер йдуть через роутер MVC (index.php?page=...)
@@ -106,25 +110,49 @@ class ShopPage extends WebPage {
 
 class CartPage extends WebPage {
     public function renderBody() {
-        echo "<main><h2>Ваш кошик (Діє знижка 10%!)</h2>";
+        echo "<main><h2>Ваш кошик</h2><p>Знижка 10% застосовується до всієї суми.</p>";
         if (empty($_SESSION['cart'])) {
-            echo "<p>Кошик порожній. <a href='index.php'>Перейти до покупок</a></p>";
+            echo "<p>Кошик порожній. <a href='index.php?page=shop'>Перейти до покупок</a></p>";
         } else {
-            echo "<table><tr><th>Послуга</th><th>Базова ціна</th><th>Кількість</th><th>Сума (Зі знижкою)</th></tr>";
+            echo "<form method='POST' action='index.php?page=cart'>";
+            echo "<input type='hidden' name='action' value='update_cart'>";
+            echo "<table><tr><th>Послуга</th><th>Ціна</th><th>Кількість</th><th>Сума</th><th>Дія</th></tr>";
             $total = 0;
             
             // Використовуємо STRATEGY для розрахунку (застосовуємо знижку 10%)
             $strategy = new DiscountPriceStrategy();
 
-            foreach ($_SESSION['cart'] as $item) {
+            foreach ($_SESSION['cart'] as $id => $item) {
                 $basePrice = $item['price'] * $item['qty'];
                 $discountedPrice = $strategy->calculate($basePrice);
                 $total += $discountedPrice;
                 
-                echo "<tr><td>{$item['name']}</td><td>{$item['price']} грн</td>
-                <td>{$item['qty']}</td><td><b style='color:green;'>{$discountedPrice} грн</b></td></tr>";
+                $safeId = $this->e($id);
+                $safeName = $this->e($item['name']);
+                $safePrice = number_format((float) $item['price'], 0, '.', '');
+                $safeDiscounted = number_format((float) $discountedPrice, 2, '.', '');
+                $safeQty = (int) $item['qty'];
+
+                echo "<tr>";
+                echo "<td>{$safeName}</td>";
+                echo "<td>{$safePrice} грн</td>";
+                echo "<td><input class='qty-input' type='number' name='cart_qty[{$safeId}]' value='{$safeQty}' min='0'></td>";
+                echo "<td><b class='cart-total'>{$safeDiscounted} грн</b></td>";
+                echo "<td><button class='btn btn-danger' type='submit' name='remove_id' value='{$safeId}'>Видалити</button></td>";
+                echo "</tr>";
             }
-            echo "</table><p>Разом до сплати: <b>{$total} грн</b></p>";
+            $finalTotal = number_format((float) $total, 2, '.', '');
+            echo "</table>";
+            echo "<div class='cart-summary'><p>Разом до сплати: <b>{$finalTotal} грн</b></p></div>";
+            echo "<div class='cart-actions'>";
+            echo "<button class='btn btn-primary' type='submit'>Оновити кількість</button>";
+            echo "</form>";
+            echo "<form method='POST' action='index.php?page=cart' class='inline-form'>";
+            echo "<input type='hidden' name='action' value='clear_cart'>";
+            echo "<button class='btn btn-danger' type='submit'>Очистити кошик</button>";
+            echo "</form>";
+            echo "<a class='btn btn-secondary' href='index.php?page=shop'>Продовжити покупки</a>";
+            echo "</div>";
         }
         echo "</main>";
     }

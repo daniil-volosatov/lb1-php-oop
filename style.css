@@ -30,6 +30,48 @@ nav a {
   margin-bottom: 15px;
   border-radius: 5px;
 }
+.cart-summary {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: #f5f9ff;
+  border: 1px solid #cfe0ff;
+  border-radius: 8px;
+}
+.cart-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 16px;
+}
+.inline-form {
+  display: inline;
+}
+.qty-input {
+  width: 80px;
+  padding: 6px 8px;
+}
+.btn {
+  display: inline-block;
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 14px;
+  text-decoration: none;
+  cursor: pointer;
+  font-weight: bold;
+}
+.btn-primary {
+  background: #1565c0;
+  color: #fff;
+}
+.btn-secondary {
+  background: #eceff1;
+  color: #333;
+}
+.btn-danger {
+  background: #c62828;
+  color: #fff;
+}
 table {
   width: 100%;
   border-collapse: collapse;
@@ -43,4 +85,7 @@ td {
 }
 th {
   background: #eee;
+}
+.cart-total {
+  color: #1b5e20;
 }
