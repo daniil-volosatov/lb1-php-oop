@@ -188,7 +188,7 @@ function getNameKeys(string $name): array
         return [];
     }
 
-    $collapsed = preg_replace('/\\s+/u', ' ', $trimmed);
+    $collapsed = preg_replace('/\s+/u', ' ', $trimmed);
     if ($collapsed === null) {
         $collapsed = $trimmed;
     }
@@ -218,7 +218,7 @@ function getNameKeys(string $name): array
 
 function normaliseUnicodeName(string $name): string
 {
-    $sanitised = preg_replace('/[^\\p{L}\\p{N}]/u', '', $name);
+    $sanitised = preg_replace('/[^\p{L}\p{N}]/u', '', $name);
     return $sanitised ?? '';
 }
 
