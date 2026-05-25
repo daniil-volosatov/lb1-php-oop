@@ -1,55 +1,88 @@
 <?php
-// 9. Оголошення простору імен
+declare(strict_types=1);
+
 namespace App\Utils;
 
-class Validator {
-    
-    // Обов'язкове 6: Перетворення рядків до формату HTML (жирний текст)
-    public static function textToHtml($text) {
-        return preg_replace('/\*\*(.*?)\*\*/', '<b>$1</b>', $text);
+final class Validator
+{
+    public static function textToHtml(string $text): string
+    {
+        $escaped = htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+        $bolded = preg_replace('/\*\*(.*?)\*\*/', '<strong>$1</strong>', $escaped);
+        return preg_replace('/\r\n|\r|\n/', '<br>', $bolded ?? $escaped);
     }
 
-    // Обов'язкове 7: Перевірка синтаксичної правильності e-mail
-    public static function validateEmail($email) {
-        return preg_match('/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $email);
+    public static function htmlToText(string $html): string
+    {
+        $withNewlines = preg_replace('/<br\s*\/?>/i', "\n", $html);
+        $stripped = preg_replace('/<[^>]+>/', '', $withNewlines ?? $html);
+        return html_entity_decode($stripped ?? $html, ENT_QUOTES, 'UTF-8');
     }
 
-    // Блок 1, Завд. 14: Витягнути нікнейм, ім'я домену та суфікс із e-mail адреси
-    public static function extractEmailParts($email) {
+    public static function fileToHtml(string $filePath): string
+    {
+        if (!is_file($filePath)) {
+            throw new \RuntimeException('The source file does not exist.');
+        }
+
+        $content = file_get_contents($filePath);
+        if ($content === false) {
+            throw new \RuntimeException('Unable to read the source file.');
+        }
+
+        return self::textToHtml($content);
+    }
+
+    public static function htmlToFile(string $html, string $filePath): void
+    {
+        $plainText = self::htmlToText($html);
+        $bytes = file_put_contents($filePath, $plainText);
+
+        if ($bytes === false) {
+            throw new \RuntimeException('Unable to write the destination file.');
+        }
+    }
+
+    public static function validateEmail(string $email): bool
+    {
+        return (bool) preg_match('/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $email);
+    }
+
+    public static function extractEmailParts(string $email): ?array
+    {
         preg_match('/^([^@]+)@([^.]+)\.(.+)$/', $email, $matches);
-        if (count($matches) == 4) {
+        if (count($matches) === 4) {
             return [
                 'nickname' => $matches[1],
                 'domain' => $matches[2],
-                'suffix' => $matches[3]
+                'suffix' => $matches[3],
             ];
         }
+
         return null;
     }
 
-    // Блок 1, Завд. 15: Замінити всюди в тексті РЯДОК 1 на РЯДОК 2
-    public static function replaceString($text, $search, $replace) {
-        // Використовуємо preg_quote, щоб екранувати спецсимволи у пошуковому рядку
+    public static function replaceString(string $text, string $search, string $replace): string
+    {
         $pattern = '/' . preg_quote($search, '/') . '/i';
-        return preg_replace($pattern, $replace, $text);
+        return preg_replace($pattern, $replace, $text) ?? $text;
     }
 
-    // Блок 2, Завд. 8: Усунення надмірної кількості великих літер (робимо капс маленьким)
-    public static function fixExcessiveCaps($text) {
-        return preg_replace_callback('/\b[A-ZА-ЯІЇЄҐ]{2,}\b/u', function($matches) {
-            return mb_convert_case($matches[0], MB_CASE_TITLE, "UTF-8");
-        }, $text);
+    public static function fixExcessiveCaps(string $text): string
+    {
+        return preg_replace_callback('/\b[A-ZА-ЯІЇЄҐ]{2,}\b/u', static function (array $matches): string {
+            return mb_convert_case($matches[0], MB_CASE_TITLE, 'UTF-8');
+        }, $text) ?? $text;
     }
 
-    // Блок 2, Завд. 29: Заміна пробілів в назвах файлів на «_» (підкреслення)
-    public static function fixFilenames($filename) {
-        return preg_replace('/[ ]+/', '_', $filename);
+    public static function fixFilenames(string $filename): string
+    {
+        return preg_replace('/[ ]+/', '_', $filename) ?? $filename;
     }
 
-    // Блок 3, Завд. 6: Витягти посилання з HTML-документів
-    public static function extractLinks($html) {
+    public static function extractLinks(string $html): array
+    {
         preg_match_all('/href=["\']([^"\']+)["\']/i', $html, $matches);
         return $matches[1] ?? [];
     }
 }
-?>
