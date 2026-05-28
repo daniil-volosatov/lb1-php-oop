@@ -11,7 +11,6 @@ use RuntimeException;
 interface DatabaseAdapter
 {
     public function connect(): PDO;
-
     public function disconnect(): void;
 }
 
@@ -95,23 +94,22 @@ final class MongoAdapter implements DatabaseAdapter
 interface DatabaseInterface
 {
     public function getAllServices(): array;
-
     public function searchServices(string $query): array;
-
     public function getServiceById(int $id): ?array;
-
     public function addService(string $name, int $price): bool;
-
     public function deleteService(int $id): bool;
-
     public function addFeedback(string $name, string $email, string $message): bool;
-
     public function recordVisit(string $visitorId, bool $isNewSession): void;
-
     public function getVisitStats(): array;
-
     public function getVisitorStats(string $visitorId): array;
-
+    
+    public function createUser(string $name, string $email, string $passwordHash, string $role = 'user'): bool;
+    public function getUserByEmail(string $email): ?array;
+    public function updateUserAvatar(int $userId, string $avatarPath): bool;
+    public function createOrder(int $userId, float $totalPrice, array $cartItems): bool;
+    public function getAllOrders(): array;
+    public function getOrderItems(int $orderId): array;
+    
     public function closeConnection(): void;
 }
 
@@ -206,7 +204,6 @@ final class FreelanceDB implements DatabaseInterface
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
-
             throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to add the service.');
         }
     }
@@ -225,7 +222,6 @@ final class FreelanceDB implements DatabaseInterface
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
-
             throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to delete the service.');
         }
     }
@@ -251,7 +247,6 @@ final class FreelanceDB implements DatabaseInterface
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
-
             throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to save the feedback.');
         }
     }
@@ -263,14 +258,12 @@ final class FreelanceDB implements DatabaseInterface
         try {
             $this->pdo->beginTransaction();
 
-            // Update total hits for every request and visits only once per session window.
             $updateStatsSql = $isNewSession
                 ? 'UPDATE visit_stats SET total_visits = total_visits + 1, total_hits = total_hits + 1, updated_at = :updated_at WHERE id = 1'
                 : 'UPDATE visit_stats SET total_hits = total_hits + 1, updated_at = :updated_at WHERE id = 1';
             $statsStatement = $this->pdo->prepare($updateStatsSql);
             $statsStatement->execute([':updated_at' => date('Y-m-d H:i:s')]);
 
-            // Track per-visitor counters using an upsert for consistent totals.
             $visitorStatement = $this->pdo->prepare(
                 'INSERT INTO visit_visitors (visitor_id, visits, hits, last_visit_at)
                 VALUES (:visitor_id, :visits, :hits, :last_visit_at)
@@ -292,7 +285,6 @@ final class FreelanceDB implements DatabaseInterface
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
-
             throw $this->wrapPdoException($exception, null, 'Unable to record visit statistics.');
         }
     }
@@ -338,43 +330,180 @@ final class FreelanceDB implements DatabaseInterface
         }
     }
 
+    public function createUser(string $name, string $email, string $passwordHash, string $role = 'user'): bool
+    {
+        $this->ensureConnection();
+        try {
+            $this->pdo->beginTransaction();
+            $statement = $this->pdo->prepare('INSERT INTO users (name, email, password_hash, role, created_at) VALUES (:name, :email, :password_hash, :role, :created_at)');
+            $statement->execute([
+                ':name' => $name,
+                ':email' => $email,
+                ':password_hash' => $passwordHash,
+                ':role' => $role,
+                ':created_at' => date('Y-m-d H:i:s')
+            ]);
+            $this->pdo->commit();
+            return true;
+        } catch (PDOException $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to register user (Email may already exist).');
+        }
+    }
+
+    public function getUserByEmail(string $email): ?array
+    {
+        $this->ensureConnection();
+        try {
+            $statement = $this->pdo->prepare('SELECT * FROM users WHERE email = :email LIMIT 1');
+            $statement->execute([':email' => $email]);
+            $result = $statement->fetch();
+            return $result === false ? null : $result;
+        } catch (PDOException $exception) {
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to load user.');
+        }
+    }
+
+    public function updateUserAvatar(int $userId, string $avatarPath): bool
+    {
+        $this->ensureConnection();
+        try {
+            $this->pdo->beginTransaction();
+            $statement = $this->pdo->prepare('UPDATE users SET avatar_path = :avatar_path WHERE id = :id');
+            $statement->execute([
+                ':avatar_path' => $avatarPath,
+                ':id' => $userId
+            ]);
+            $this->pdo->commit();
+            return true;
+        } catch (PDOException $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to update avatar.');
+        }
+    }
+
+    public function createOrder(int $userId, float $totalPrice, array $cartItems): bool
+    {
+        $this->ensureConnection();
+        try {
+            $this->pdo->beginTransaction();
+            
+            $orderStmt = $this->pdo->prepare('INSERT INTO orders (user_id, total_price, created_at) VALUES (:user_id, :total_price, :created_at)');
+            $orderStmt->execute([
+                ':user_id' => $userId,
+                ':total_price' => $totalPrice,
+                ':created_at' => date('Y-m-d H:i:s')
+            ]);
+            $orderId = (int)$this->pdo->lastInsertId();
+
+            $itemStmt = $this->pdo->prepare('INSERT INTO order_items (order_id, service_name, qty, price) VALUES (:order_id, :service_name, :qty, :price)');
+            foreach ($cartItems as $item) {
+                $itemStmt->execute([
+                    ':order_id' => $orderId,
+                    ':service_name' => $item['name'],
+                    ':qty' => (int)$item['qty'],
+                    ':price' => (float)$item['price']
+                ]);
+            }
+
+            $this->pdo->commit();
+            return true;
+        } catch (PDOException $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $this->wrapPdoException($exception, null, 'Unable to create order.');
+        }
+    }
+
+    public function getAllOrders(): array
+    {
+        $this->ensureConnection();
+        try {
+            $statement = $this->pdo->query('
+                SELECT o.id, o.total_price, o.created_at, u.name as user_name, u.email as user_email
+                FROM orders o
+                JOIN users u ON o.user_id = u.id
+                ORDER BY o.created_at DESC
+            ');
+            return $statement->fetchAll();
+        } catch (PDOException $exception) {
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to load orders.');
+        }
+    }
+
+    public function getOrderItems(int $orderId): array
+    {
+        $this->ensureConnection();
+        try {
+            $statement = $this->pdo->prepare('SELECT service_name, qty, price FROM order_items WHERE order_id = :order_id');
+            $statement->execute([':order_id' => $orderId]);
+            return $statement->fetchAll();
+        } catch (PDOException $exception) {
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to load order items.');
+        }
+    }
+
     private function createTables(): void
     {
-        $this->pdo->exec(
-            'CREATE TABLE IF NOT EXISTS services (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                price INTEGER NOT NULL
-            )'
-        );
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS services (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            price INTEGER NOT NULL
+        )');
 
-        $this->pdo->exec(
-            'CREATE TABLE IF NOT EXISTS feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                email TEXT NOT NULL,
-                message TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )'
-        );
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )');
 
-        $this->pdo->exec(
-            'CREATE TABLE IF NOT EXISTS visit_stats (
-                id INTEGER PRIMARY KEY,
-                total_visits INTEGER NOT NULL DEFAULT 0,
-                total_hits INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL
-            )'
-        );
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS visit_stats (
+            id INTEGER PRIMARY KEY,
+            total_visits INTEGER NOT NULL DEFAULT 0,
+            total_hits INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        )');
 
-        $this->pdo->exec(
-            'CREATE TABLE IF NOT EXISTS visit_visitors (
-                visitor_id TEXT PRIMARY KEY,
-                visits INTEGER NOT NULL DEFAULT 0,
-                hits INTEGER NOT NULL DEFAULT 0,
-                last_visit_at TEXT NOT NULL
-            )'
-        );
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS visit_visitors (
+            visitor_id TEXT PRIMARY KEY,
+            visits INTEGER NOT NULL DEFAULT 0,
+            hits INTEGER NOT NULL DEFAULT 0,
+            last_visit_at TEXT NOT NULL
+        )');
+
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT "user",
+            avatar_path TEXT,
+            created_at TEXT NOT NULL
+        )');
+
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            total_price REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )');
+
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS order_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            service_name TEXT NOT NULL,
+            qty INTEGER NOT NULL,
+            price REAL NOT NULL,
+            FOREIGN KEY (order_id) REFERENCES orders(id)
+        )');
     }
 
     private function seedData(): void
@@ -382,21 +511,31 @@ final class FreelanceDB implements DatabaseInterface
         $statement = $this->pdo->query('SELECT COUNT(*) FROM services');
         $count = (int) $statement->fetchColumn();
 
-        if ($count > 0) {
-            return;
+        if ($count === 0) {
+            $services = [
+                ['Лендінг пейдж', 3000],
+                ['Дизайн логотипу', 1500],
+                ['Налаштування реклами', 2000],
+            ];
+            $insertStatement = $this->pdo->prepare('INSERT INTO services (name, price) VALUES (:name, :price)');
+
+            foreach ($services as $service) {
+                $insertStatement->execute([
+                    ':name' => $service[0],
+                    ':price' => $service[1],
+                ]);
+            }
         }
-
-        $services = [
-            ['Лендінг пейдж', 3000],
-            ['Дизайн логотипу', 1500],
-            ['Налаштування реклами', 2000],
-        ];
-        $insertStatement = $this->pdo->prepare('INSERT INTO services (name, price) VALUES (:name, :price)');
-
-        foreach ($services as $service) {
-            $insertStatement->execute([
-                ':name' => $service[0],
-                ':price' => $service[1],
+        
+        $adminStmt = $this->pdo->query('SELECT COUNT(*) FROM users WHERE role = "admin"');
+        if ((int) $adminStmt->fetchColumn() === 0) {
+            $insertAdmin = $this->pdo->prepare('INSERT INTO users (name, email, password_hash, role, created_at) VALUES (:name, :email, :password_hash, :role, :created_at)');
+            $insertAdmin->execute([
+                ':name' => 'Admin',
+                ':email' => 'admin@store.com',
+                ':password_hash' => password_hash('12345678', PASSWORD_DEFAULT),
+                ':role' => 'admin',
+                ':created_at' => date('Y-m-d H:i:s')
             ]);
         }
     }
@@ -494,6 +633,40 @@ final class LoggerDecorator implements DatabaseInterface
     public function getVisitorStats(string $visitorId): array
     {
         return $this->db->getVisitorStats($visitorId);
+    }
+    
+    public function createUser(string $name, string $email, string $passwordHash, string $role = 'user'): bool
+    {
+        error_log(sprintf('[DB] Registering new user: %s.', $email));
+        return $this->db->createUser($name, $email, $passwordHash, $role);
+    }
+
+    public function getUserByEmail(string $email): ?array
+    {
+        return $this->db->getUserByEmail($email);
+    }
+
+    public function updateUserAvatar(int $userId, string $avatarPath): bool
+    {
+        error_log(sprintf('[DB] Updating avatar for user ID %d.', $userId));
+        return $this->db->updateUserAvatar($userId, $avatarPath);
+    }
+
+    public function createOrder(int $userId, float $totalPrice, array $cartItems): bool
+    {
+        error_log(sprintf('[DB] Creating order for user ID %d. Total: %f.', $userId, $totalPrice));
+        return $this->db->createOrder($userId, $totalPrice, $cartItems);
+    }
+
+    public function getAllOrders(): array
+    {
+        error_log('[DB] Loading all orders for admin.');
+        return $this->db->getAllOrders();
+    }
+
+    public function getOrderItems(int $orderId): array
+    {
+        return $this->db->getOrderItems($orderId);
     }
 
     public function closeConnection(): void

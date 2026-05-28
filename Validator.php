@@ -85,4 +85,43 @@ final class Validator
         preg_match_all('/href=["\']([^"\']+)["\']/i', $html, $matches);
         return $matches[1] ?? [];
     }
+
+    // НОВІ МЕТОДИ ДЛЯ АВТОРИЗАЦІЇ ТА АВАТАРІВ
+    
+    public static function validatePassword(string $password): bool
+    {
+        return mb_strlen($password, 'UTF-8') >= 8;
+    }
+
+    public static function validateImageUpload(array $file): string
+    {
+        if (!isset($file['error']) || is_array($file['error'])) {
+            throw new \RuntimeException('Некоректні параметри файлу.');
+        }
+
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            throw new \RuntimeException('Помилка завантаження файлу. Код: ' . $file['error']);
+        }
+
+        if ($file['size'] > 2097152) { // Обмеження 2 МБ
+            throw new \RuntimeException('Файл занадто великий (максимум 2 МБ).');
+        }
+
+        $finfo = new \finfo(FILEINFO_MIME_TYPE);
+        $mime = $finfo->file($file['tmp_name']);
+        
+        $allowedMimes = [
+            'jpg' => 'image/jpeg',
+            'png' => 'image/png',
+            'gif' => 'image/gif',
+        ];
+
+        $ext = array_search($mime, $allowedMimes, true);
+        if ($ext === false) {
+            throw new \RuntimeException('Дозволені лише формати JPG, PNG та GIF.');
+        }
+
+        // Генеруємо унікальне ім'я, щоб уникнути конфліктів та зломів
+        return sprintf('%s.%s', bin2hex(random_bytes(8)), $ext);
+    }
 }

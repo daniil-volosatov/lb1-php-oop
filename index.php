@@ -16,20 +16,14 @@ final class Router
 {
     private static ?Router $instance = null;
 
-    private function __construct()
-    {
-    }
-
-    private function __clone()
-    {
-    }
+    private function __construct() {}
+    private function __clone() {}
 
     public static function getInstance(): Router
     {
         if (self::$instance === null) {
             self::$instance = new Router();
         }
-
         return self::$instance;
     }
 
@@ -46,15 +40,29 @@ final class FrontController
 
     public function __construct()
     {
-        // Adapter + Decorator patterns: swap database adapters and log writes.
         $adapter = new SqliteAdapter(__DIR__ . '/freelance.sqlite');
         $this->db = new LoggerDecorator(new FreelanceDB($adapter));
         $this->visitCounter = new VisitCounter($this->db);
+        
+        $this->checkAuthCookie();
+    }
+
+    private function checkAuthCookie(): void
+    {
+        if (!isset($_SESSION['user_id']) && isset($_COOKIE['remember_user'])) {
+            $email = (string)$_COOKIE['remember_user'];
+            $user = $this->db->getUserByEmail($email);
+            if ($user) {
+                $_SESSION['user_id'] = (int)$user['id'];
+                $_SESSION['user_name'] = $user['name'];
+                $_SESSION['user_email'] = $user['email'];
+                $_SESSION['user_role'] = $user['role'];
+            }
+        }
     }
 
     public function handleRequest(): void
     {
-        // MVC controller: orchestrates requests, models, and views.
         $this->initialiseCart();
         $visitSnapshot = $this->visitCounter->captureVisit();
 
@@ -65,13 +73,42 @@ final class FrontController
         $pageType = Router::getInstance()->getRoute();
         $flash = $this->consumeFlash();
 
-        if ($pageType === 'cart') {
-            $page = new CartPage('Мій кошик');
-        } else {
-            $searchQuery = $this->getSearchQuery();
-            $loadError = null;
-            $services = $this->loadServices($searchQuery, $loadError);
-            $page = new ShopPage('Головна | Послуги', $services, $searchQuery, $loadError);
+        switch ($pageType) {
+            case 'cart':
+                $page = new CartPage('Мій кошик');
+                break;
+            case 'login':
+                $page = new LoginPage('Вхід в систему');
+                break;
+            case 'register':
+                $page = new RegisterPage('Реєстрація');
+                break;
+            case 'profile':
+                if (!isset($_SESSION['user_id'])) $this->redirect('login');
+                $page = new ProfilePage('Мій профіль', $this->db);
+                break;
+                case 'chat':
+                if (!isset($_SESSION['user_id'])) {
+                    $this->setFlash('Увійдіть в систему, щоб користуватися чатом.', 'error');
+                    $this->redirect('login');
+                }
+                $page = new ChatPage('Freelance Чат');
+                break;
+            case 'admin':
+                if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'admin') $this->redirect('shop');
+                $orders = $this->db->getAllOrders();
+                foreach ($orders as &$order) {
+                    $order['items'] = $this->db->getOrderItems((int)$order['id']);
+                }
+                $page = new AdminPage('Панель адміністратора', $orders);
+                break;
+            default:
+                // ЦЕЙ БЛОК ВІДПОВІДАЄ ЗА ГОЛОВНУ СТОРІНКУ (SHOP)
+                $searchQuery = $this->getSearchQuery();
+                $loadError = null;
+                $services = $this->loadServices($searchQuery, $loadError);
+                $page = new ShopPage('Головна | Послуги', $services, $searchQuery, $loadError);
+                break;
         }
 
         if ($flash !== null) {
@@ -93,18 +130,170 @@ final class FrontController
     private function handlePostAction(string $action): void
     {
         switch ($action) {
-            case 'add_to_cart':
-                $this->handleAddToCart();
-                break;
-            case 'update_cart':
-                $this->handleUpdateCart();
-                break;
-            case 'clear_cart':
-                $this->handleClearCart();
-                break;
-            case 'submit_feedback':
-                $this->handleFeedback();
-                break;
+            case 'add_to_cart': $this->handleAddToCart(); break;
+            case 'update_cart': $this->handleUpdateCart(); break;
+            case 'clear_cart': $this->handleClearCart(); break;
+            case 'checkout': $this->handleCheckout(); break;
+            case 'submit_feedback': $this->handleFeedback(); break;
+            case 'login': $this->handleLogin(); break;
+            case 'register': $this->handleRegister(); break;
+            case 'logout': $this->handleLogout(); break;
+            case 'update_profile': $this->handleUpdateProfile(); break;
+            case 'add_service': $this->handleAddService(); break;
+        }
+    }
+
+    private function handleAddService(): void
+    {
+        if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'admin') {
+            $this->redirect('shop');
+        }
+
+        $name = trim((string) ($_POST['name'] ?? ''));
+        $price = filter_input(INPUT_POST, 'price', FILTER_VALIDATE_INT);
+
+        if ($name === '' || $price === false || $price <= 0) {
+            $this->setFlash('Помилка: Назва не може бути порожньою, а ціна має бути більшою за нуль.', 'error');
+        } else {
+            try {
+                $this->db->addService($name, $price);
+                $this->setFlash('Послугу успішно додано до каталогу!', 'success');
+            } catch (RuntimeException $e) {
+                $this->setFlash($e->getMessage(), 'error');
+            }
+        }
+        $this->redirect('admin');
+    }
+
+    private function handleLogin(): void
+    {
+        $email = trim((string)($_POST['email'] ?? ''));
+        $password = (string)($_POST['password'] ?? '');
+        $remember = isset($_POST['remember']);
+
+        if (!Validator::validateEmail($email)) {
+            $this->setFlash('Некоректний формат email.', 'error');
+            $this->redirect('login');
+        }
+
+        $user = $this->db->getUserByEmail($email);
+        if ($user && password_verify($password, $user['password_hash'])) {
+            $_SESSION['user_id'] = (int)$user['id'];
+            $_SESSION['user_name'] = $user['name'];
+            $_SESSION['user_email'] = $user['email'];
+            $_SESSION['user_role'] = $user['role'];
+
+            if ($remember) {
+                setcookie('remember_user', $email, time() + (86400 * 30), "/");
+            }
+
+            $this->setFlash('Ви успішно увійшли!', 'success');
+            $this->redirect('shop');
+        } else {
+            $this->setFlash('Невірний email або пароль.', 'error');
+            $this->redirect('login');
+        }
+    }
+
+    private function handleRegister(): void
+    {
+        $name = trim((string)($_POST['name'] ?? ''));
+        $email = trim((string)($_POST['email'] ?? ''));
+        $password = (string)($_POST['password'] ?? '');
+        $password_confirm = (string)($_POST['password_confirm'] ?? '');
+
+        if ($name === '' || !Validator::validateEmail($email)) {
+            $this->setFlash('Перевірте правильність заповнення імені та email.', 'error');
+            $this->redirect('register');
+        }
+
+        if (!Validator::validatePassword($password)) {
+            $this->setFlash('Пароль має містити мінімум 8 символів.', 'error');
+            $this->redirect('register');
+        }
+
+        if ($password !== $password_confirm) {
+            $this->setFlash('Паролі не співпадають.', 'error');
+            $this->redirect('register');
+        }
+
+        $hash = password_hash($password, PASSWORD_DEFAULT);
+        
+        try {
+            $this->db->createUser($name, $email, $hash);
+            $this->setFlash('Реєстрація успішна! Тепер ви можете увійти.', 'success');
+            $this->redirect('login');
+        } catch (RuntimeException $e) {
+            $this->setFlash($e->getMessage(), 'error');
+            $this->redirect('register');
+        }
+    }
+
+    private function handleLogout(): void
+    {
+        unset($_SESSION['user_id'], $_SESSION['user_name'], $_SESSION['user_email'], $_SESSION['user_role']);
+        setcookie('remember_user', '', time() - 3600, '/');
+        $this->setFlash('Ви вийшли з системи.', 'info');
+        $this->redirect('shop');
+    }
+
+    // ФОТОГАЛЕРЕЯ ДЛЯ ПРОФІЛЮ 
+    private function handleUpdateProfile(): void
+    {
+        if (!isset($_SESSION['user_id'])) $this->redirect('login');
+
+        if (!empty($_FILES['avatar']) && $_FILES['avatar']['error'] !== UPLOAD_ERR_NO_FILE) {
+            try {
+                $uploadDir = __DIR__ . '/images/avatars/';
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0777, true);
+                }
+
+                $fileName = Validator::validateImageUpload($_FILES['avatar']);
+                $dest = $uploadDir . $fileName;
+
+                if (move_uploaded_file($_FILES['avatar']['tmp_name'], $dest)) {
+                    $avatarPath = 'images/avatars/' . $fileName;
+                    $this->db->updateUserAvatar($_SESSION['user_id'], $avatarPath);
+                    $this->setFlash('Фото профілю успішно оновлено!', 'success');
+                } else {
+                    $this->setFlash('Не вдалося зберегти файл на сервері.', 'error');
+                }
+            } catch (RuntimeException $e) {
+                $this->setFlash($e->getMessage(), 'error');
+            }
+        }
+        $this->redirect('profile');
+    }
+
+    // ОФОРМЛЕННЯ ЗАМОВЛЕННЯ
+    private function handleCheckout(): void
+    {
+        if (!isset($_SESSION['user_id'])) {
+            $this->setFlash('Будь ласка, увійдіть в систему, щоб оформити замовлення.', 'error');
+            $this->redirect('login');
+        }
+
+        if (empty($_SESSION['cart'])) {
+            $this->setFlash('Ваш кошик порожній.', 'error');
+            $this->redirect('cart');
+        }
+
+        $total = 0.0;
+        $strategy = new DiscountPriceStrategy();
+        foreach ($_SESSION['cart'] as $item) {
+            $basePrice = $item['price'] * $item['qty'];
+            $total += $strategy->calculate($basePrice);
+        }
+
+        try {
+            $this->db->createOrder($_SESSION['user_id'], $total, $_SESSION['cart']);
+            $_SESSION['cart'] = []; // Очищаємо кошик після покупки
+            $this->setFlash('Дякуємо! Ваше замовлення успішно оформлено.', 'success');
+            $this->redirect('profile');
+        } catch (RuntimeException $e) {
+            $this->setFlash('Помилка при оформленні замовлення: ' . $e->getMessage(), 'error');
+            $this->redirect('cart');
         }
     }
 
@@ -272,6 +461,6 @@ try {
     $app->handleRequest();
 } catch (RuntimeException $exception) {
     http_response_code(500);
-    echo '<h1>Something went wrong.</h1>';
+    echo '<h1>Щось пішло не так.</h1>';
     echo '<p>' . htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8') . '</p>';
 }
