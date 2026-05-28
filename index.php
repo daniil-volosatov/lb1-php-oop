@@ -242,6 +242,9 @@ final class FrontController
     {
         if (!isset($_SESSION['user_id'])) $this->redirect('login');
 
+        $messages = [];
+        $errors = [];
+
         if (!empty($_FILES['avatar']) && $_FILES['avatar']['error'] !== UPLOAD_ERR_NO_FILE) {
             try {
                 $uploadDir = __DIR__ . '/images/avatars/';
@@ -255,15 +258,80 @@ final class FrontController
                 if (move_uploaded_file($_FILES['avatar']['tmp_name'], $dest)) {
                     $avatarPath = 'images/avatars/' . $fileName;
                     $this->db->updateUserAvatar($_SESSION['user_id'], $avatarPath);
-                    $this->setFlash('Фото профілю успішно оновлено!', 'success');
+                    $messages[] = 'Фото профілю успішно оновлено!';
                 } else {
-                    $this->setFlash('Не вдалося зберегти файл на сервері.', 'error');
+                    $errors[] = 'Не вдалося зберегти файл фото профілю.';
                 }
             } catch (RuntimeException $e) {
-                $this->setFlash($e->getMessage(), 'error');
+                $errors[] = $e->getMessage();
             }
         }
+
+        $galleryFiles = $this->normaliseUploadedFiles($_FILES['gallery_images'] ?? []);
+        if (!empty($galleryFiles)) {
+            $galleryDir = __DIR__ . '/images/gallery/user_' . $_SESSION['user_id'] . '/';
+            if (!is_dir($galleryDir)) {
+                mkdir($galleryDir, 0777, true);
+            }
+
+            $uploadedCount = 0;
+            foreach ($galleryFiles as $file) {
+                try {
+                    $fileName = Validator::validateImageUpload($file);
+                    $dest = $galleryDir . $fileName;
+                    if (!move_uploaded_file($file['tmp_name'], $dest)) {
+                        $errors[] = sprintf('Не вдалося зберегти файл %s.', $file['name']);
+                        continue;
+                    }
+
+                    $galleryPath = 'images/gallery/user_' . $_SESSION['user_id'] . '/' . $fileName;
+                    $this->db->addUserGalleryImage($_SESSION['user_id'], $galleryPath);
+                    $uploadedCount++;
+                } catch (RuntimeException $e) {
+                    $errors[] = $file['name'] !== '' ? $file['name'] . ': ' . $e->getMessage() : $e->getMessage();
+                }
+            }
+
+            if ($uploadedCount > 0) {
+                $messages[] = sprintf('Додано фото в галерею: %d.', $uploadedCount);
+            }
+        }
+
+        if (!empty($errors)) {
+            $prefix = $messages ? implode(' ', $messages) . ' ' : '';
+            $this->setFlash($prefix . 'Деякі файли не вдалося завантажити: ' . implode('; ', $errors), 'error');
+        } elseif (!empty($messages)) {
+            $this->setFlash(implode(' ', $messages), 'success');
+        } else {
+            $this->setFlash('Файли не вибрано.', 'error');
+        }
+
         $this->redirect('profile');
+    }
+
+    private function normaliseUploadedFiles(array $files): array
+    {
+        if (!isset($files['name']) || !is_array($files['name'])) {
+            return [];
+        }
+
+        $normalised = [];
+        foreach ($files['name'] as $index => $name) {
+            $error = $files['error'][$index] ?? UPLOAD_ERR_NO_FILE;
+            if ($error === UPLOAD_ERR_NO_FILE && $name === '') {
+                continue;
+            }
+
+            $normalised[] = [
+                'name' => $name ?? '',
+                'type' => $files['type'][$index] ?? '',
+                'tmp_name' => $files['tmp_name'][$index] ?? '',
+                'error' => $error,
+                'size' => $files['size'][$index] ?? 0,
+            ];
+        }
+
+        return $normalised;
     }
 
     // ОФОРМЛЕННЯ ЗАМОВЛЕННЯ

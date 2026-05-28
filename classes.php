@@ -269,6 +269,7 @@ final class ProfilePage extends WebPage
         } else {
             $avatarHtml = "<div style='width: 150px; height: 150px; border-radius: 50%; background: #eee; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; color: #999;'>Немає фото</div>";
         }
+        $galleryImages = $this->db->getUserGalleryImages((int) $user['id']);
 
         echo "<section class='page-title'><div><h1>Особистий кабінет</h1></div></section>";
         echo "<section class='feedback-card' style='max-width: 600px; margin: 0 auto; text-align: center;'>";
@@ -284,6 +285,88 @@ final class ProfilePage extends WebPage
         echo "  <input type='file' name='avatar' accept='image/png, image/jpeg, image/gif' required style='margin-bottom: 15px;'>";
         echo "  <button class='btn btn-primary' type='submit'>Завантажити фото</button>";
         echo "</form>";
+
+        echo "<hr style='margin: 24px 0; border-top: 1px solid #eee;'>";
+        echo "<h4>Галерея</h4>";
+        if (empty($galleryImages)) {
+            echo "<p class='muted'>Поки що немає фото в галереї.</p>";
+        } else {
+            echo "<div class='gallery-grid'>";
+            foreach ($galleryImages as $index => $image) {
+                $path = $this->escape((string) $image['image_path']);
+                echo "<button class='gallery-item' type='button' data-gallery-index='{$index}' aria-label='Відкрити фото з галереї'>";
+                echo "  <img src='{$path}' alt='Фото з галереї'>";
+                echo "</button>";
+            }
+            echo "</div>";
+        }
+
+        echo "<form method='POST' action='index.php' enctype='multipart/form-data' class='feedback-form' style='display: flex; flex-direction: column; align-items: center; margin-top: 16px;'>";
+        echo "  <input type='hidden' name='action' value='update_profile'>";
+        echo "  <input type='file' name='gallery_images[]' accept='image/png, image/jpeg, image/gif' multiple required style='margin-bottom: 15px;'>";
+        echo "  <button class='btn btn-ghost' type='submit'>Додати фото в галерею</button>";
+        echo "</form>";
+
+        echo "<div class='lightbox' id='gallery-lightbox' aria-hidden='true'>";
+        echo "  <div class='lightbox__backdrop' data-lightbox-close></div>";
+        echo "  <div class='lightbox__content' role='dialog' aria-modal='true' aria-label='Перегляд фото'>";
+        echo "    <button class='lightbox__close' type='button' data-lightbox-close aria-label='Закрити'>&times;</button>";
+        echo "    <button class='lightbox__nav lightbox__nav--prev' type='button' data-lightbox-prev aria-label='Попереднє фото'>&lsaquo;</button>";
+        echo "    <img class='lightbox__image' src='' alt='Фото з галереї'>";
+        echo "    <button class='lightbox__nav lightbox__nav--next' type='button' data-lightbox-next aria-label='Наступне фото'>&rsaquo;</button>";
+        echo "  </div>";
+        echo "</div>";
+
+        echo "<script>
+            (function() {
+                const grid = document.querySelector('.gallery-grid');
+                if (!grid) { return; }
+                const images = Array.from(grid.querySelectorAll('img'));
+                if (images.length === 0) { return; }
+                const lightbox = document.getElementById('gallery-lightbox');
+                const lightboxImage = lightbox.querySelector('.lightbox__image');
+                const closeButtons = lightbox.querySelectorAll('[data-lightbox-close]');
+                const prevButton = lightbox.querySelector('[data-lightbox-prev]');
+                const nextButton = lightbox.querySelector('[data-lightbox-next]');
+                let currentIndex = 0;
+
+                const openAt = (index) => {
+                    currentIndex = (index + images.length) % images.length;
+                    lightboxImage.src = images[currentIndex].src;
+                    lightbox.classList.add('is-open');
+                    lightbox.setAttribute('aria-hidden', 'false');
+                    document.body.classList.add('lightbox-open');
+                };
+
+                const close = () => {
+                    lightbox.classList.remove('is-open');
+                    lightbox.setAttribute('aria-hidden', 'true');
+                    lightboxImage.src = '';
+                    document.body.classList.remove('lightbox-open');
+                };
+
+                const showPrev = () => openAt(currentIndex - 1);
+                const showNext = () => openAt(currentIndex + 1);
+
+                grid.querySelectorAll('.gallery-item').forEach((item) => {
+                    item.addEventListener('click', () => {
+                        const index = parseInt(item.getAttribute('data-gallery-index') || '0', 10);
+                        openAt(index);
+                    });
+                });
+
+                closeButtons.forEach((btn) => btn.addEventListener('click', close));
+                prevButton.addEventListener('click', showPrev);
+                nextButton.addEventListener('click', showNext);
+
+                document.addEventListener('keydown', (event) => {
+                    if (!lightbox.classList.contains('is-open')) { return; }
+                    if (event.key === 'Escape') { close(); }
+                    if (event.key === 'ArrowLeft') { showPrev(); }
+                    if (event.key === 'ArrowRight') { showNext(); }
+                });
+            })();
+        </script>";
         echo "</section>";
     }
 }
