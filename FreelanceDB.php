@@ -106,6 +106,8 @@ interface DatabaseInterface
     public function createUser(string $name, string $email, string $passwordHash, string $role = 'user'): bool;
     public function getUserByEmail(string $email): ?array;
     public function updateUserAvatar(int $userId, string $avatarPath): bool;
+    public function addUserGalleryImage(int $userId, string $imagePath): bool;
+    public function getUserGalleryImages(int $userId): array;
     public function createOrder(int $userId, float $totalPrice, array $cartItems): bool;
     public function getAllOrders(): array;
     public function getOrderItems(int $orderId): array;
@@ -386,6 +388,43 @@ final class FreelanceDB implements DatabaseInterface
         }
     }
 
+    public function addUserGalleryImage(int $userId, string $imagePath): bool
+    {
+        $this->ensureConnection();
+        try {
+            $this->pdo->beginTransaction();
+            $statement = $this->pdo->prepare(
+                'INSERT INTO user_gallery_images (user_id, image_path, uploaded_at) VALUES (:user_id, :image_path, :uploaded_at)'
+            );
+            $statement->execute([
+                ':user_id' => $userId,
+                ':image_path' => $imagePath,
+                ':uploaded_at' => date('Y-m-d H:i:s'),
+            ]);
+            $this->pdo->commit();
+            return true;
+        } catch (PDOException $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to save gallery image.');
+        }
+    }
+
+    public function getUserGalleryImages(int $userId): array
+    {
+        $this->ensureConnection();
+        try {
+            $statement = $this->pdo->prepare(
+                'SELECT * FROM user_gallery_images WHERE user_id = :user_id ORDER BY uploaded_at DESC'
+            );
+            $statement->execute([':user_id' => $userId]);
+            return $statement->fetchAll();
+        } catch (PDOException $exception) {
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to load gallery images.');
+        }
+    }
+
     public function createOrder(int $userId, float $totalPrice, array $cartItems): bool
     {
         $this->ensureConnection();
@@ -486,6 +525,14 @@ final class FreelanceDB implements DatabaseInterface
             role TEXT NOT NULL DEFAULT "user",
             avatar_path TEXT,
             created_at TEXT NOT NULL
+        )');
+
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS user_gallery_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            image_path TEXT NOT NULL,
+            uploaded_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
         )');
 
         $this->pdo->exec('CREATE TABLE IF NOT EXISTS orders (
@@ -650,6 +697,17 @@ final class LoggerDecorator implements DatabaseInterface
     {
         error_log(sprintf('[DB] Updating avatar for user ID %d.', $userId));
         return $this->db->updateUserAvatar($userId, $avatarPath);
+    }
+
+    public function addUserGalleryImage(int $userId, string $imagePath): bool
+    {
+        error_log(sprintf('[DB] Adding gallery image for user ID %d.', $userId));
+        return $this->db->addUserGalleryImage($userId, $imagePath);
+    }
+
+    public function getUserGalleryImages(int $userId): array
+    {
+        return $this->db->getUserGalleryImages($userId);
     }
 
     public function createOrder(int $userId, float $totalPrice, array $cartItems): bool

@@ -46,7 +46,12 @@ final class Validator
     public static function fixExcessiveCaps(string $text): string
     {
         return preg_replace_callback('/\b[A-ZА-ЯІЇЄҐ]{2,}\b/u', static function (array $matches): string {
-            return mb_convert_case($matches[0], MB_CASE_TITLE, 'UTF-8');
+            if (\function_exists('mb_convert_case')) {
+                return \mb_convert_case($matches[0], MB_CASE_TITLE, 'UTF-8');
+            }
+
+            // Fallback for environments without mbstring: use a best-effort ASCII-safe transform
+            return ucwords(strtolower($matches[0]));
         }, $text) ?? $text;
     }
 
@@ -57,7 +62,8 @@ final class Validator
 
     public static function validatePassword(string $password): bool
     {
-        return mb_strlen($password, 'UTF-8') >= 8;
+        $len = \function_exists('mb_strlen') ? \mb_strlen($password, 'UTF-8') : \strlen($password);
+        return $len >= 8;
     }
 
     public static function validateImageUpload(array $file): string
@@ -66,6 +72,7 @@ final class Validator
             throw new \RuntimeException('Помилка завантаження.');
         }
 
+<<<<<<< HEAD
         $finfo = new \finfo(FILEINFO_MIME_TYPE);
         $mime = $finfo->file($file['tmp_name']);
         
@@ -75,5 +82,47 @@ final class Validator
         }
 
         return bin2hex(random_bytes(8)) . '.' . explode('/', $mime)[1];
+=======
+        $allowedMimes = [
+            'jpg' => 'image/jpeg',
+            'jpeg' => 'image/jpeg',
+            'png' => 'image/png',
+            'gif' => 'image/gif',
+        ];
+
+        $mime = null;
+        if (\class_exists('finfo')) {
+            $finfo = new \finfo(FILEINFO_MIME_TYPE);
+            $mime = $finfo->file($file['tmp_name']);
+        } elseif (\function_exists('mime_content_type')) {
+            $mime = \mime_content_type($file['tmp_name']);
+        } elseif (\function_exists('getimagesize')) {
+            $imageInfo = @getimagesize($file['tmp_name']);
+            $mime = $imageInfo['mime'] ?? null;
+        }
+
+        $ext = null;
+        if ($mime !== null) {
+            $ext = array_search($mime, $allowedMimes, true);
+        }
+
+        if ($ext === false || $ext === null) {
+            $nameExt = strtolower(pathinfo((string) ($file['name'] ?? ''), PATHINFO_EXTENSION));
+            if ($nameExt !== '' && array_key_exists($nameExt, $allowedMimes)) {
+                $ext = $nameExt;
+            }
+        }
+
+        if ($ext === false || $ext === null) {
+            throw new \RuntimeException('Дозволені лише формати JPG, PNG та GIF.');
+        }
+
+        if ($ext === 'jpeg') {
+            $ext = 'jpg';
+        }
+
+        // Генеруємо унікальне ім'я, щоб уникнути конфліктів та зломів
+        return sprintf('%s.%s', bin2hex(random_bytes(8)), $ext);
+>>>>>>> 141fc518cdad06cc4a51f3397c130a793bfd4d31
     }
 }
