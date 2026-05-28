@@ -14,21 +14,6 @@ echo '<p>Форматування HTML: ' . Validator::textToHtml($text) . '</p>
 $email = 'test@nure.ua';
 echo '<p>Email (' . htmlspecialchars($email, ENT_QUOTES, 'UTF-8') . ') коректний? ' . (Validator::validateEmail($email) ? 'Так' : 'Ні') . '</p>';
 
-echo '<h3>Перетворення файлів HTML ↔ текст</h3>';
-$tempSource = tempnam(sys_get_temp_dir(), 'fx_');
-$tempTarget = tempnam(sys_get_temp_dir(), 'fx_');
-if ($tempSource !== false && $tempTarget !== false) {
-    file_put_contents($tempSource, "Line one\nLine two with **bold** word.");
-    $html = Validator::fileToHtml($tempSource);
-    Validator::htmlToFile($html, $tempTarget);
-    $restored = file_get_contents($tempTarget);
-
-    echo '<p>HTML з файлу: ' . $html . '</p>';
-    echo '<p>Повернений текст: ' . htmlspecialchars((string) $restored, ENT_QUOTES, 'UTF-8') . '</p>';
-
-    unlink($tempSource);
-    unlink($tempTarget);
-}
 
 echo '<h3>Блок 1</h3>';
 $parts = Validator::extractEmailParts('nikita@gmail.com');
@@ -48,7 +33,3 @@ echo '<p>Завдання 8 (Усунення КАПСУ): ' . Validator::fixExc
 $filename = 'my best photo from 2026.jpg';
 echo '<p>Завдання 29 (Файли без пробілів): ' . Validator::fixFilenames($filename) . '</p>';
 
-echo '<h3>Блок 3</h3>';
-$html = '<a href="https://github.com">GitHub</a> і <a href="/about.php">Про нас</a>';
-$links = Validator::extractLinks($html);
-echo '<p>Завдання 6 (Посилання з HTML): ' . implode(', ', $links) . '</p>';

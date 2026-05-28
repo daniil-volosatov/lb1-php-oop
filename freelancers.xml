@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <users>
   <user>
-    <name>Іван Фрилансер</name>
-    <role>Дизайнер</role>
+    <name>Нікіта</name>
+    <role>Кодер</role>
   </user>
   <user>
-    <name>Олена Кодер</name>
-    <role>Програміст</role>
+    <name>Діма Кодер</name>
+    <role>Senior PHP Developer</role>
+  </user>
+  <user>
+    <name>Максим</name>
+    <message>Пока</message>
+  </user>
+  <user>
+    <name>Максим</name>
+    <message>ДОБРОГО ДНЯ</message>
   </user>
 </users>

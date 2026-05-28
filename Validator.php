@@ -19,30 +19,6 @@ final class Validator
         return html_entity_decode($stripped ?? $html, ENT_QUOTES, 'UTF-8');
     }
 
-    public static function fileToHtml(string $filePath): string
-    {
-        if (!is_file($filePath)) {
-            throw new \RuntimeException('The source file does not exist.');
-        }
-
-        $content = file_get_contents($filePath);
-        if ($content === false) {
-            throw new \RuntimeException('Unable to read the source file.');
-        }
-
-        return self::textToHtml($content);
-    }
-
-    public static function htmlToFile(string $html, string $filePath): void
-    {
-        $plainText = self::htmlToText($html);
-        $bytes = file_put_contents($filePath, $plainText);
-
-        if ($bytes === false) {
-            throw new \RuntimeException('Unable to write the destination file.');
-        }
-    }
-
     public static function validateEmail(string $email): bool
     {
         return (bool) preg_match('/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $email);
@@ -58,7 +34,6 @@ final class Validator
                 'suffix' => $matches[3],
             ];
         }
-
         return null;
     }
 
@@ -80,14 +55,6 @@ final class Validator
         return preg_replace('/[ ]+/', '_', $filename) ?? $filename;
     }
 
-    public static function extractLinks(string $html): array
-    {
-        preg_match_all('/href=["\']([^"\']+)["\']/i', $html, $matches);
-        return $matches[1] ?? [];
-    }
-
-    // НОВІ МЕТОДИ ДЛЯ АВТОРИЗАЦІЇ ТА АВАТАРІВ
-    
     public static function validatePassword(string $password): bool
     {
         return mb_strlen($password, 'UTF-8') >= 8;
@@ -95,33 +62,18 @@ final class Validator
 
     public static function validateImageUpload(array $file): string
     {
-        if (!isset($file['error']) || is_array($file['error'])) {
-            throw new \RuntimeException('Некоректні параметри файлу.');
-        }
-
         if ($file['error'] !== UPLOAD_ERR_OK) {
-            throw new \RuntimeException('Помилка завантаження файлу. Код: ' . $file['error']);
-        }
-
-        if ($file['size'] > 2097152) { // Обмеження 2 МБ
-            throw new \RuntimeException('Файл занадто великий (максимум 2 МБ).');
+            throw new \RuntimeException('Помилка завантаження.');
         }
 
         $finfo = new \finfo(FILEINFO_MIME_TYPE);
         $mime = $finfo->file($file['tmp_name']);
         
-        $allowedMimes = [
-            'jpg' => 'image/jpeg',
-            'png' => 'image/png',
-            'gif' => 'image/gif',
-        ];
-
-        $ext = array_search($mime, $allowedMimes, true);
-        if ($ext === false) {
-            throw new \RuntimeException('Дозволені лише формати JPG, PNG та GIF.');
+        $allowed = ['image/jpeg', 'image/png', 'image/gif'];
+        if (!in_array($mime, $allowed, true)) {
+            throw new \RuntimeException('Недопустимий формат.');
         }
 
-        // Генеруємо унікальне ім'я, щоб уникнути конфліктів та зломів
-        return sprintf('%s.%s', bin2hex(random_bytes(8)), $ext);
+        return bin2hex(random_bytes(8)) . '.' . explode('/', $mime)[1];
     }
 }
