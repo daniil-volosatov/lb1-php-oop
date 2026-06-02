@@ -72,17 +72,6 @@ final class Validator
             throw new \RuntimeException('Помилка завантаження.');
         }
 
-<<<<<<< HEAD
-        $finfo = new \finfo(FILEINFO_MIME_TYPE);
-        $mime = $finfo->file($file['tmp_name']);
-        
-        $allowed = ['image/jpeg', 'image/png', 'image/gif'];
-        if (!in_array($mime, $allowed, true)) {
-            throw new \RuntimeException('Недопустимий формат.');
-        }
-
-        return bin2hex(random_bytes(8)) . '.' . explode('/', $mime)[1];
-=======
         $allowedMimes = [
             'jpg' => 'image/jpeg',
             'jpeg' => 'image/jpeg',
@@ -121,8 +110,6 @@ final class Validator
             $ext = 'jpg';
         }
 
-        // Генеруємо унікальне ім'я, щоб уникнути конфліктів та зломів
         return sprintf('%s.%s', bin2hex(random_bytes(8)), $ext);
->>>>>>> 141fc518cdad06cc4a51f3397c130a793bfd4d31
     }
 }
