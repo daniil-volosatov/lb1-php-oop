@@ -221,7 +221,24 @@ class WebPage
         echo "  <div>&copy; 2026 Freelance Store | Усі права захищено</div>";
         echo "  <div class='muted'>Створено з турботою • Доступно для всіх</div>";
         echo "</footer>";
-        echo "</div></body></html>";
+        echo "</div>";
+        
+        echo "<script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const alertMessage = document.querySelector('.alert');
+                if (alertMessage) {
+                    setTimeout(() => {
+                        alertMessage.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+                        alertMessage.style.opacity = '0';
+                        alertMessage.style.transform = 'translateY(-10px)';
+                        
+                        setTimeout(() => alertMessage.remove(), 600);
+                    }, 4000);
+                }
+            });
+        </script>";
+
+        echo "</body></html>";
     }
 
     public function renderBody(): void
@@ -699,5 +716,14 @@ final class ChatPage extends WebPage
             }
         </script>
 HTML;
+    }
+
+}
+final class PaymentSuccessPage extends WebPage
+{
+    public function renderBody(): void
+    {
+        header('Location: index.php?page=shop');
+        exit;
     }
 }

@@ -1,6 +1,11 @@
 <?php
 declare(strict_types=1);
 
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+
 session_start();
 
 require_once __DIR__ . '/classes.php';
@@ -66,6 +71,14 @@ final class FrontController
         $this->initialiseCart();
         $visitSnapshot = $this->visitCounter->captureVisit();
 
+        if (isset($_GET['payment']) && $_GET['payment'] === 'success') {
+            $_SESSION['cart'] = []; // Очищаємо кошик покупця
+            $this->setFlash('Дякуємо! Ваше замовлення успішно сформовано та оплачено.', 'success');
+            
+            // Робимо чистий редирект на shop, щоб прибрати "хвіст" з URL і не дублювати сесію при оновленні сторінки
+            $this->redirect('shop');
+        }
+
         if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $this->handlePostAction((string) $_POST['action']);
         }
@@ -101,6 +114,9 @@ final class FrontController
                     $order['items'] = $this->db->getOrderItems((int)$order['id']);
                 }
                 $page = new AdminPage('Панель адміністратора', $orders);
+                break;
+            case 'payment-success':
+                $page = new PaymentSuccessPage();
                 break;
             default:
                 // ЦЕЙ БЛОК ВІДПОВІДАЄ ЗА ГОЛОВНУ СТОРІНКУ (SHOP)
@@ -334,7 +350,6 @@ final class FrontController
         return $normalised;
     }
 
-    // ОФОРМЛЕННЯ ЗАМОВЛЕННЯ
     private function handleCheckout(): void
     {
         if (!isset($_SESSION['user_id'])) {
@@ -355,14 +370,66 @@ final class FrontController
         }
 
         try {
-            $this->db->createOrder($_SESSION['user_id'], $total, $_SESSION['cart']);
-            $_SESSION['cart'] = []; // Очищаємо кошик після покупки
-            $this->setFlash('Дякуємо! Ваше замовлення успішно оформлено.', 'success');
-            $this->redirect('profile');
+            $insertedId = $this->db->createOrder($_SESSION['user_id'], $total, $_SESSION['cart']);
+            $orderId = $insertedId ? (string)$insertedId : (string)time();
+            
+            $monoPaymentUrl = $this->createMonoInvoice($total, $orderId);
+
+            if ($monoPaymentUrl !== null) {
+                $_SESSION['cart'] = []; 
+                $this->setFlash('Дякуємо! Ваше замовлення успішно сформовано та оплачено.', 'success');
+                
+                header('Location: ' . $monoPaymentUrl);
+                exit;
+            } else {
+                $_SESSION['cart'] = [];
+                $this->setFlash('Замовлення створено, але не вдалося підключити платіжну систему. Оплата при отриманні.', 'info');
+                $this->redirect('profile');
+            }
+
         } catch (RuntimeException $e) {
             $this->setFlash('Помилка при оформленні замовлення: ' . $e->getMessage(), 'error');
             $this->redirect('cart');
         }
+    }
+
+    private function createMonoInvoice(float $amount, string $orderId): ?string
+    {
+        $monoToken = 'u3f8j9trWufK8A1tgPfqInzsOcf_gc5JSa12ZBAOujdA'; 
+        
+        $url = 'https://api.monobank.ua/api/merchant/invoice/create';
+
+        $body = [
+            'amount' => (int)round($amount * 100), 
+            'ccy' => 980,                          
+            'merchantInvoiceId' => $orderId,       
+            'redirectUrl' => 'http://localhost:8000/index.php?payment=success',            'text' => 'Тестова оплата замовлення №' . $orderId . ' у Freelance Store',
+        ];
+
+        // Налаштовуємо cURL запит
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'X-Token: ' . $monoToken       
+             ]);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        if ($httpCode === 200 && $response) {
+            $data = json_decode($response, true);
+            return $data['pageUrl'] ?? null;
+        }
+
+        error_log("Monobank API Error. HTTP Code: {$httpCode}, Response: {$response}");
+        return null;
     }
 
     private function handleAddToCart(): void
