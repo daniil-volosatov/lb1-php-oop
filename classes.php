@@ -567,6 +567,7 @@ final class CartPage extends WebPage
         } else {
             echo "<form method='POST' action='index.php?page=cart' aria-label='Форма кошика'>";
             echo "  <input type='hidden' name='action' value='update_cart'>";
+            echo "  <button type='submit' style='display:none;' aria-hidden='true'></button>";
             echo "  <table class='cart-table' role='table'>";
             echo "    <thead><tr><th>Послуга</th><th>Ціна</th><th>Кількість</th><th>Сума</th><th>Дія</th></tr></thead>";
             echo "    <tbody>";
@@ -587,7 +588,7 @@ final class CartPage extends WebPage
                 echo "<tr>";
                 echo "<td class='product' data-label='Послуга'>{$safeName}</td>";
                 echo "<td class='price' data-label='Ціна'>{$safePrice} грн</td>";
-                echo "<td class='qty' data-label='Кількість'><input class='qty-input' type='number' name='cart_qty[{$safeId}]' value='{$safeQty}' min='0' aria-label='Кількість'></td>";
+                echo "<td class='qty' data-label='Кількість'><input class='qty-input' type='number' name='cart_qty[{$safeId}]' value='{$safeQty}' min='0' aria-label='Кількість' onchange='this.form.submit()'></td>";
                 echo "<td class='total' data-label='Сума'><b class='cart-total'>{$safeDiscounted} грн</b></td>";
                 echo "<td data-label='Дія'><button class='btn btn-danger' type='submit' name='remove_id' value='{$safeId}'>Видалити</button></td>";
                 echo "</tr>";
@@ -597,7 +598,6 @@ final class CartPage extends WebPage
             echo "  </table>";
             echo "  <div class='cart-summary'><div class='muted'>Загальна сума (зі знижкою)</div><div style='font-weight:800;font-size:1.1rem;color:var(--colour-primary)'>{$totalStr} грн</div></div>";
             echo "  <div class='cart-actions'>";
-            echo "    <button class='btn btn-ghost' type='submit' style='border: 1px solid #ccc;'>Оновити кількість</button>";
             echo "</form>";
             
             // КНОПКА ОФОРМЛЕННЯ ЗАМОВЛЕННЯ АБО ПРОПОЗИЦІЯ УВІЙТИ
@@ -628,10 +628,8 @@ final class ChatPage extends WebPage
         $userName = $_SESSION['user_name'] ?? 'Гість';
         $isAdmin = (isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin');
         
-        // Кнопка нотифікацій доступна тільки адміну
         $adminBtn = $isAdmin ? "<button class='btn btn-danger' type='button' onclick='sendMessage(\"notification\")'>Нотифікація всім</button>" : "";
 
-        // Використовуємо HEREDOC для зручного виводу HTML та JS
         echo <<<HTML
         <section class='page-title'><div><h1>Freelance Чат</h1><p class='section-lead'>Спілкуйтесь з клієнтами та виконавцями в реальному часі.</p></div></section>
         

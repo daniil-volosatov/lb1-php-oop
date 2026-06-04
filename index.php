@@ -68,14 +68,49 @@ final class FrontController
 
     public function handleRequest(): void
     {
+
+        $sessionLifetime = 10800; 
+            if (session_status() === PHP_SESSION_NONE) {
+                ini_set('session.gc_maxlifetime', $sessionLifetime);
+                session_set_cookie_params([
+                    'lifetime' => $sessionLifetime,
+                    'path' => '/',
+                    'httponly' => true,
+                    'samesite' => 'Lax'
+                ]);
+                session_start();
+            }
+
+            if (isset($_SESSION['user_id'])) {
+                if (isset($_SESSION['last_activity'])) {
+                    $elapsedTime = time() - $_SESSION['last_activity'];
+
+                    if ($elapsedTime > $sessionLifetime) {
+                        session_unset();
+                        session_destroy();
+
+                        if (isset($_COOKIE['remember_user'])) {
+                        setcookie('remember_user', '', time() - 3600, '/');
+                        unset($_COOKIE['remember_user']); 
+                    }
+                        
+                        session_start();
+                        $this->setFlash('Час вашої сесії вичерпався. Будь ласка, увійдіть знову.', 'error');
+                        
+                        header("Location: index.php?page=login");
+                        exit;
+                    }
+                }
+                
+                $_SESSION['last_activity'] = time();
+            }
+
         $this->initialiseCart();
         $visitSnapshot = $this->visitCounter->captureVisit();
 
         if (isset($_GET['payment']) && $_GET['payment'] === 'success') {
-            $_SESSION['cart'] = []; // Очищаємо кошик покупця
+            $_SESSION['cart'] = [];
             $this->setFlash('Дякуємо! Ваше замовлення успішно сформовано та оплачено.', 'success');
-            
-            // Робимо чистий редирект на shop, щоб прибрати "хвіст" з URL і не дублювати сесію при оновленні сторінки
             $this->redirect('shop');
         }
 
@@ -119,7 +154,6 @@ final class FrontController
                 $page = new PaymentSuccessPage();
                 break;
             default:
-                // ЦЕЙ БЛОК ВІДПОВІДАЄ ЗА ГОЛОВНУ СТОРІНКУ (SHOP)
                 $searchQuery = $this->getSearchQuery();
                 $loadError = null;
                 $services = $this->loadServices($searchQuery, $loadError);
@@ -202,6 +236,7 @@ final class FrontController
             if ($remember) {
                 setcookie('remember_user', $email, time() + (86400 * 30), "/");
             }
+            $_SESSION['last_activity'] = time();
 
             $this->setFlash('Ви успішно увійшли!', 'success');
             $this->redirect('shop');
@@ -247,7 +282,7 @@ final class FrontController
 
     private function handleLogout(): void
     {
-        unset($_SESSION['user_id'], $_SESSION['user_name'], $_SESSION['user_email'], $_SESSION['user_role']);
+        unset($_SESSION['user_id'], $_SESSION['user_name'], $_SESSION['user_email'], $_SESSION['user_role'], $_SESSION['last_activity']);
         setcookie('remember_user', '', time() - 3600, '/');
         $this->setFlash('Ви вийшли з системи.', 'info');
         $this->redirect('shop');
