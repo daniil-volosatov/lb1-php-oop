@@ -1,3 +1,25 @@
+<?php
+session_start();
+if (!isset($_SESSION['user_id'])) {
+    header("Location: index.php?page=login");
+    exit;
+}
+
+require_once __DIR__ . '/FreelanceDB.php';
+
+use App\Database\FreelanceDB;
+use App\Database\SqliteAdapter;
+
+$adapter = new SqliteAdapter(__DIR__ . '/freelance.sqlite');
+$db = new FreelanceDB($adapter);
+
+$userId = $_SESSION['user_id'];
+$userName = $_SESSION['user_name'] ?? 'Гість';
+$role = $_SESSION['user_role'] ?? 'user';
+$isAdmin = ($role === 'admin');
+
+$token = $db->createWebSocketToken((int)$userId, $userName, $role);
+?>
 <!DOCTYPE html>
 <html lang="uk">
 <head>
@@ -26,7 +48,7 @@
         </header>
 
         <main class="chat-shell">
-            <div id="notification-area" class="notification-banner" style="display:none;">Нове сповіщення!</div>
+            <div id="notification-area" class="notification-banner" style="display:none; background: #ffc107; padding: 10px; text-align: center; font-weight: bold; margin-bottom: 15px; border-radius: 5px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">Нове сповіщення!</div>
 
             <section class="chat-panel" aria-labelledby="chat-title">
                 <div class="chat-panel__header">
@@ -41,20 +63,34 @@
 
                 <div class="chat-composer">
                     <label class="sr-only" for="username">Ваше ім'я</label>
-                    <input type="text" id="username" placeholder="Ваше ім'я (Відправник)" value="Нікіта" aria-label="Ваше ім'я">
+                    <input type="text" id="username" placeholder="Ваше ім'я (Відправник)" value="<?php echo htmlspecialchars($userName, ENT_QUOTES, 'UTF-8'); ?>" readonly style="background: #e9ecef; cursor: not-allowed; border: 1px solid #ccc; padding: 8px; border-radius: 4px;" aria-label="Ваше ім'я">
                     <label class="sr-only" for="recipient">Отримувач</label>
-                    <input type="text" id="recipient" placeholder="Кому (Ім'я отримувача)" aria-label="Отримувач">
+                    <input type="text" id="recipient" placeholder="Кому (Ім'я отримувача)" aria-label="Отримувач" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
                     <label class="sr-only" for="message">Повідомлення</label>
-                    <input type="text" id="message" placeholder="Введіть повідомлення..." aria-label="Повідомлення">
+                    <input type="text" id="message" placeholder="Введіть повідомлення..." aria-label="Повідомлення" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc;" onkeypress="if(event.key === 'Enter') sendMessage('chat')">
                     <button class="btn btn-primary" type="button" onclick="sendMessage('chat')">Відправити в чат</button>
-                    <button class="btn btn-danger" type="button" onclick="sendMessage('notification')">Нотифікація всім</button>
+                    <?php if ($isAdmin): ?>
+                        <button class="btn btn-danger" type="button" onclick="sendMessage('notification')">Нотифікація всім</button>
+                    <?php endif; ?>
                 </div>
             </section>
         </main>
     </div>
 
     <script>
-        var ws = new WebSocket("ws://127.0.0.1:8090");
+        function escapeHtml(text) {
+            if (!text) return "";
+            var map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+
+        var ws = new WebSocket("ws://127.0.0.1:8090/?token=" + encodeURIComponent("<?php echo htmlspecialchars($token, ENT_QUOTES, 'UTF-8'); ?>"));
         var registeredName = "";
 
         ws.onopen = function() {
@@ -68,17 +104,17 @@
             
             if(data.type === 'notification') {
                 var notifArea = document.getElementById('notification-area');
-                notifArea.innerHTML = "📢 <b>" + data.sender + "</b> надіслав сповіщення: " + data.msg + " <span style='font-size:12px'>" + data.date + "</span>";
+                notifArea.innerHTML = "📢 <b>" + escapeHtml(data.sender) + "</b> надіслав сповіщення: " + escapeHtml(data.msg) + " <span style='font-size:12px'>" + escapeHtml(data.date) + "</span>";
                 notifArea.style.display = "block";
                 setTimeout(() => notifArea.style.display = "none", 5000);
             } else if (data.type === 'error') {
                 var chatWindow = document.getElementById("chat-window");
-                chatWindow.innerHTML += "<div class='message message--received'><b>System:</b> " + data.msg + "<span class='message__meta'>" + data.date + "</span></div>";
+                chatWindow.innerHTML += "<div class='message message--received'><b>System:</b> " + escapeHtml(data.msg) + "<span class='message__meta'>" + escapeHtml(data.date) + "</span></div>";
                 chatWindow.scrollTop = chatWindow.scrollHeight;
             } else {
                 var chatWindow = document.getElementById("chat-window");
                 var senderClass = data.sender === document.getElementById('username').value ? 'message--sent' : 'message--received';
-                chatWindow.innerHTML += "<div class='message " + senderClass + "'><b>" + data.sender + ":</b> " + data.msg + "<span class='message__meta'>" + data.date + "</span></div>";
+                chatWindow.innerHTML += "<div class='message " + senderClass + "'><b>" + escapeHtml(data.sender) + ":</b> " + escapeHtml(data.msg) + "<span class='message__meta'>" + escapeHtml(data.date) + "</span></div>";
                 chatWindow.scrollTop = chatWindow.scrollHeight;
             }
         };
@@ -108,10 +144,6 @@
             ws.send(JSON.stringify(payload));
             document.getElementById("message").value = "";
         }
-
-        document.getElementById("username").addEventListener("input", function() {
-            registerClient(false);
-        });
     </script>
 </body>
 </html>

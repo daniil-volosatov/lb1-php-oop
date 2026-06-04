@@ -72,6 +72,10 @@ final class Validator
             throw new \RuntimeException('Помилка завантаження.');
         }
 
+        if ($file['size'] > 5 * 1024 * 1024) {
+            throw new \RuntimeException('Розмір файлу не повинен перевищувати 5MB.');
+        }
+
         $allowedMimes = [
             'jpg' => 'image/jpeg',
             'jpeg' => 'image/jpeg',

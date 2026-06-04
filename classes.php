@@ -139,6 +139,12 @@ class WebPage
         return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
     }
 
+    protected function getCsrfInput(): string
+    {
+        $token = $_SESSION['csrf_token'] ?? '';
+        return "<input type='hidden' name='csrf_token' value='{$this->escape($token)}'>";
+    }
+
     public function setVisitSnapshot(VisitSnapshot $snapshot): void
     {
         $this->visitSnapshot = $snapshot;
@@ -183,7 +189,7 @@ class WebPage
             if ($_SESSION['user_role'] === 'admin') {
                 echo "    <a href='index.php?page=admin' style='color: red;'>CRM (Адмін)</a>";
             }
-            echo "    <form method='POST' action='index.php' style='display:inline;'><input type='hidden' name='action' value='logout'><button type='submit' class='btn btn-ghost' style='padding: 5px 10px;'>Вийти</button></form>";
+            echo "    <form method='POST' action='index.php' style='display:inline;'><input type='hidden' name='action' value='logout'>{$this->getCsrfInput()}<button type='submit' class='btn btn-ghost' style='padding: 5px 10px;'>Вийти</button></form>";
         } else {
             echo "    <a href='index.php?page=login'>Увійти</a>";
             echo "    <a href='index.php?page=register'>Реєстрація</a>";
@@ -299,6 +305,7 @@ final class ProfilePage extends WebPage
         echo "<h4>Оновити фото профілю</h4>";
         echo "<form method='POST' action='index.php' enctype='multipart/form-data' class='feedback-form' style='display: flex; flex-direction: column; align-items: center;'>";
         echo "  <input type='hidden' name='action' value='update_profile'>";
+        echo "  " . $this->getCsrfInput();
         echo "  <input type='file' name='avatar' accept='image/png, image/jpeg, image/gif' required style='margin-bottom: 15px;'>";
         echo "  <button class='btn btn-primary' type='submit'>Завантажити фото</button>";
         echo "</form>";
@@ -320,6 +327,7 @@ final class ProfilePage extends WebPage
 
         echo "<form method='POST' action='index.php' enctype='multipart/form-data' class='feedback-form' style='display: flex; flex-direction: column; align-items: center; margin-top: 16px;'>";
         echo "  <input type='hidden' name='action' value='update_profile'>";
+        echo "  " . $this->getCsrfInput();
         echo "  <input type='file' name='gallery_images[]' accept='image/png, image/jpeg, image/gif' multiple required style='margin-bottom: 15px;'>";
         echo "  <button class='btn btn-ghost' type='submit'>Додати фото в галерею</button>";
         echo "</form>";
@@ -387,7 +395,7 @@ final class ProfilePage extends WebPage
         echo "</section>";
     }
 }
-// СТОРІНКА АДМІНІСТРАТОРА (CRM)
+
 // СТОРІНКА АДМІНІСТРАТОРА (CRM)
 final class AdminPage extends WebPage
 {
@@ -408,6 +416,7 @@ final class AdminPage extends WebPage
         echo "  <h3 style='margin-top:0'>Додати нову послугу</h3>";
         echo "  <form method='POST' action='index.php' class='feedback-form' style='display:flex; gap:10px; align-items:flex-end; flex-wrap: wrap;'>";
         echo "    <input type='hidden' name='action' value='add_service'>";
+        echo "    " . $this->getCsrfInput();
         echo "    <div class='form-field' style='flex: 2; min-width: 200px;'><label>Назва послуги</label><input name='name' type='text' required></div>";
         echo "    <div class='form-field' style='flex: 1; min-width: 100px;'><label>Ціна (грн)</label><input name='price' type='number' min='1' required></div>";
         echo "    <button class='btn btn-primary' type='submit' style='margin-bottom: 15px;'>Додати до каталогу</button>";
@@ -455,6 +464,7 @@ final class LoginPage extends WebPage
         echo "  <h2 class='section-title'>Вхід в систему</h2>";
         echo "  <form method='POST' action='index.php' class='feedback-form'>";
         echo "    <input type='hidden' name='action' value='login'>";
+        echo "    " . $this->getCsrfInput();
         echo "    <div class='form-field'><label>Ваш Email</label><input name='email' type='email' required></div>";
         echo "    <div class='form-field'><label>Пароль</label><input name='password' type='password' required></div>";
         echo "    <div class='form-field'><label style='display:flex; align-items:center;'><input type='checkbox' name='remember' style='width:auto; margin-right:10px;'> Запам'ятати мене</label></div>";
@@ -473,9 +483,10 @@ final class RegisterPage extends WebPage
         echo "  <h2 class='section-title'>Створення акаунту</h2>";
         echo "  <form method='POST' action='index.php' class='feedback-form'>";
         echo "    <input type='hidden' name='action' value='register'>";
+        echo "    " . $this->getCsrfInput();
         echo "    <div class='form-field'><label>Ім'я та Прізвище</label><input name='name' type='text' required></div>";
         echo "    <div class='form-field'><label>Email (для входу)</label><input name='email' type='email' required></div>";
-        echo "    <div class='form-field'><label>Пароль (мін. 8 символів)</label><input name='password' type='password' minlength='8' required></div>";
+        echo "    <div class='form-field'><label>Пароль (мін. 8 symbols)</label><input name='password' type='password' minlength='8' required></div>";
         echo "    <div class='form-field'><label>Підтвердіть пароль</label><input name='password_confirm' type='password' minlength='8' required></div>";
         echo "    <button class='btn btn-primary' style='width: 100%' type='submit'>Зареєструватися</button>";
         echo "  </form>";
@@ -528,6 +539,7 @@ final class ShopPage extends WebPage
             echo "  <div class='card-footer'>";
             echo "    <form method='POST' action='index.php' class='cart-form'>";
             echo "      <input type='hidden' name='action' value='add_to_cart'>";
+            echo "      " . $this->getCsrfInput();
             echo "      <input type='hidden' name='product_id' value='{$safeId}'>";
             echo "      <div class='qty-field'><label class='sr-only' for='qty-{$safeId}'>Кількість</label><input id='qty-{$safeId}' type='number' name='qty' value='1' min='1' aria-label='Quantity'></div>";
             echo "      <button class='btn btn-primary' type='submit'>В кошик</button>";
@@ -544,6 +556,7 @@ final class ShopPage extends WebPage
             echo "  <p class='section-lead'>Напишіть нам, якщо потрібна індивідуальна консультація.</p>";
             echo "  <form method='POST' action='index.php?page=shop' class='feedback-form'>";
             echo "    <input type='hidden' name='action' value='submit_feedback'>";
+            echo "    " . $this->getCsrfInput();
             echo "    <div class='form-grid'>";
             echo "      <div class='form-field'><label for='feedback-name'>Ваше ім’я</label><input id='feedback-name' name='name' type='text' required></div>";
             echo "      <div class='form-field'><label for='feedback-email'>Email</label><input id='feedback-email' name='email' type='email' required></div>";
@@ -567,6 +580,7 @@ final class CartPage extends WebPage
         } else {
             echo "<form method='POST' action='index.php?page=cart' aria-label='Форма кошика'>";
             echo "  <input type='hidden' name='action' value='update_cart'>";
+            echo "  " . $this->getCsrfInput();
             echo "  <button type='submit' style='display:none;' aria-hidden='true'></button>";
             echo "  <table class='cart-table' role='table'>";
             echo "    <thead><tr><th>Послуга</th><th>Ціна</th><th>Кількість</th><th>Сума</th><th>Дія</th></tr></thead>";
@@ -604,6 +618,7 @@ final class CartPage extends WebPage
             if (isset($_SESSION['user_id'])) {
                 echo "    <form method='POST' action='index.php' class='inline-form' style='margin-left: 10px;'>";
                 echo "      <input type='hidden' name='action' value='checkout'>";
+                echo "      " . $this->getCsrfInput();
                 echo "      <button class='btn btn-primary' type='submit' style='background-color: #28a745;'>Оформити замовлення</button>";
                 echo "    </form>";
             } else {
@@ -612,6 +627,7 @@ final class CartPage extends WebPage
 
             echo "    <form method='POST' action='index.php?page=cart' class='inline-form' style='margin-left: auto;'>";
             echo "      <input type='hidden' name='action' value='clear_cart'>";
+            echo "      " . $this->getCsrfInput();
             echo "      <button class='btn btn-danger' type='submit'>Очистити кошик</button>";
             echo "    </form>";
             echo "  </div>";
@@ -622,11 +638,25 @@ final class CartPage extends WebPage
 // СТОРІНКА ЧАТУ ТА НОТИФІКАЦІЙ
 final class ChatPage extends WebPage
 {
+    private DatabaseInterface $db;
+
+    public function __construct(string $title, DatabaseInterface $db)
+    {
+        parent::__construct($title);
+        $this->db = $db;
+    }
+
     public function renderBody(): void
     {
-        // Автоматично беремо ім'я користувача з сесії
+        $userId = $_SESSION['user_id'] ?? 0;
         $userName = $_SESSION['user_name'] ?? 'Гість';
-        $isAdmin = (isset($_SESSION['user_role']) && $_SESSION['user_role'] === 'admin');
+        $role = $_SESSION['user_role'] ?? 'user';
+        $isAdmin = ($role === 'admin');
+        
+        $token = '';
+        if ($userId > 0) {
+            $token = $this->db->createWebSocketToken((int)$userId, $userName, $role);
+        }
         
         $adminBtn = $isAdmin ? "<button class='btn btn-danger' type='button' onclick='sendMessage(\"notification\")'>Нотифікація всім</button>" : "";
 
@@ -648,7 +678,19 @@ final class ChatPage extends WebPage
         </section>
 
         <script>
-            var ws = new WebSocket("ws://127.0.0.1:8090");
+            function escapeHtml(text) {
+                if (!text) return "";
+                var map = {
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#039;'
+                };
+                return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+            }
+
+            var ws = new WebSocket("ws://127.0.0.1:8090/?token=" + encodeURIComponent("{$this->escape($token)}"));
             var registeredName = "";
 
             ws.onopen = function() {
@@ -662,12 +704,12 @@ final class ChatPage extends WebPage
                 
                 if(data.type === 'notification') {
                     var notifArea = document.getElementById('notification-area');
-                    notifArea.innerHTML = '📢 <b>' + data.sender + '</b> сповіщає: ' + data.msg + ' <span style="font-size:12px; font-weight:normal; margin-left: 10px;">' + data.date + '</span>';
+                    notifArea.innerHTML = '📢 <b>' + escapeHtml(data.sender) + '</b> сповіщає: ' + escapeHtml(data.msg) + ' <span style="font-size:12px; font-weight:normal; margin-left: 10px;">' + escapeHtml(data.date) + '</span>';
                     notifArea.style.display = 'block';
                     setTimeout(() => notifArea.style.display = 'none', 7000);
                 } else if (data.type === 'error') {
                     var chatWindow = document.getElementById("chat-window");
-                    chatWindow.innerHTML += '<div style="text-align: center; color: #dc3545; font-size: 0.9em; margin-bottom: 10px;"><b>Система:</b> ' + data.msg + '</div>';
+                    chatWindow.innerHTML += '<div style="text-align: center; color: #dc3545; font-size: 0.9em; margin-bottom: 10px;"><b>Система:</b> ' + escapeHtml(data.msg) + '</div>';
                     chatWindow.scrollTop = chatWindow.scrollHeight;
                 } else {
                     var chatWindow = document.getElementById("chat-window");
@@ -678,9 +720,9 @@ final class ChatPage extends WebPage
                     
                     var msgHtml = '<div style="align-self: ' + align + '; max-width: 75%;">';
                     msgHtml += '<div style="background: ' + bg + '; border: 1px solid ' + border + '; padding: 8px 12px; border-radius: 15px; display: inline-block; text-align: left; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">';
-                    msgHtml += '<b style="font-size: 0.85em; color: #555;">' + data.sender + '</b><br>';
-                    msgHtml += '<span style="font-size: 1rem; color: #333;">' + data.msg + '</span><br>';
-                    msgHtml += '<span style="font-size: 0.7em; color: #999; float: right; margin-top: 5px; margin-left: 15px;">' + data.date + '</span>';
+                    msgHtml += '<b style="font-size: 0.85em; color: #555;">' + escapeHtml(data.sender) + '</b><br>';
+                    msgHtml += '<span style="font-size: 1rem; color: #333;">' + escapeHtml(data.msg) + '</span><br>';
+                    msgHtml += '<span style="font-size: 0.7em; color: #999; float: right; margin-top: 5px; margin-left: 15px;">' + escapeHtml(data.date) + '</span>';
                     msgHtml += '</div></div>';
                     
                     chatWindow.innerHTML += msgHtml;

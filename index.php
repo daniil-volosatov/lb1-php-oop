@@ -1,11 +1,19 @@
 <?php
 declare(strict_types=1);
 
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
 error_reporting(E_ALL);
 
-
+$sessionLifetime = 10800;
+ini_set('session.gc_maxlifetime', (string)$sessionLifetime);
+session_set_cookie_params([
+    'lifetime' => $sessionLifetime,
+    'path' => '/',
+    'httponly' => true,
+    'samesite' => 'Lax',
+    'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'
+]);
 session_start();
 
 require_once __DIR__ . '/classes.php';
@@ -14,6 +22,8 @@ require_once __DIR__ . '/Validator.php';
 use App\Database\DatabaseInterface;
 use App\Database\FreelanceDB;
 use App\Database\LoggerDecorator;
+use App\Database\EncryptingDecorator;
+use App\Database\CachingDecorator;
 use App\Database\SqliteAdapter;
 use App\Utils\Validator;
 
@@ -46,7 +56,13 @@ final class FrontController
     public function __construct()
     {
         $adapter = new SqliteAdapter(__DIR__ . '/freelance.sqlite');
-        $this->db = new LoggerDecorator(new FreelanceDB($adapter));
+        $this->db = new LoggerDecorator(
+            new CachingDecorator(
+                new EncryptingDecorator(
+                    new FreelanceDB($adapter)
+                )
+            )
+        );
         $this->visitCounter = new VisitCounter($this->db);
         
         $this->checkAuthCookie();
@@ -55,55 +71,77 @@ final class FrontController
     private function checkAuthCookie(): void
     {
         if (!isset($_SESSION['user_id']) && isset($_COOKIE['remember_user'])) {
-            $email = (string)$_COOKIE['remember_user'];
-            $user = $this->db->getUserByEmail($email);
+            $token = (string)$_COOKIE['remember_user'];
+            $user = $this->db->validateRememberToken($token);
             if ($user) {
                 $_SESSION['user_id'] = (int)$user['id'];
                 $_SESSION['user_name'] = $user['name'];
                 $_SESSION['user_email'] = $user['email'];
                 $_SESSION['user_role'] = $user['role'];
+
+                $this->db->deleteRememberToken($token);
+                $newToken = bin2hex(random_bytes(32));
+                $this->db->createRememberToken((int)$user['id'], $newToken);
+                setcookie('remember_user', $newToken, [
+                    'expires' => time() + (86400 * 30),
+                    'path' => '/',
+                    'httponly' => true,
+                    'samesite' => 'Lax',
+                    'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'
+                ]);
+            } else {
+                setcookie('remember_user', '', time() - 3600, '/');
             }
         }
     }
 
     public function handleRequest(): void
     {
+        // Security Headers
+        header('X-Frame-Options: DENY');
+        header('X-Content-Type-Options: nosniff');
+        header('Referrer-Policy: no-referrer-when-downgrade');
 
         $sessionLifetime = 10800; 
-            if (session_status() === PHP_SESSION_NONE) {
-                ini_set('session.gc_maxlifetime', $sessionLifetime);
-                session_set_cookie_params([
-                    'lifetime' => $sessionLifetime,
-                    'path' => '/',
-                    'httponly' => true,
-                    'samesite' => 'Lax'
-                ]);
-                session_start();
+
+        if (empty($_SESSION['csrf_token'])) {
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+        }
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $postedToken = $_POST['csrf_token'] ?? '';
+            if (!hash_equals($_SESSION['csrf_token'] ?? '', $postedToken)) {
+                http_response_code(403);
+                $this->setFlash('Помилка: Недійсний CSRF-токен.', 'error');
+                $this->redirect('shop');
             }
+        }
 
-            if (isset($_SESSION['user_id'])) {
-                if (isset($_SESSION['last_activity'])) {
-                    $elapsedTime = time() - $_SESSION['last_activity'];
+        if (isset($_SESSION['user_id'])) {
+            if (isset($_SESSION['last_activity'])) {
+                $elapsedTime = time() - $_SESSION['last_activity'];
 
-                    if ($elapsedTime > $sessionLifetime) {
-                        session_unset();
-                        session_destroy();
+                if ($elapsedTime > $sessionLifetime) {
+                    session_unset();
+                    session_destroy();
 
-                        if (isset($_COOKIE['remember_user'])) {
+                    if (isset($_COOKIE['remember_user'])) {
+                        $token = (string)$_COOKIE['remember_user'];
+                        $this->db->deleteRememberToken($token);
                         setcookie('remember_user', '', time() - 3600, '/');
                         unset($_COOKIE['remember_user']); 
                     }
-                        
-                        session_start();
-                        $this->setFlash('Час вашої сесії вичерпався. Будь ласка, увійдіть знову.', 'error');
-                        
-                        header("Location: index.php?page=login");
-                        exit;
-                    }
+                    
+                    session_start();
+                    $this->setFlash('Час вашої сесії вичерпався. Будь ласка, увійдіть знову.', 'error');
+                    
+                    header("Location: index.php?page=login");
+                    exit;
                 }
-                
-                $_SESSION['last_activity'] = time();
             }
+            
+            $_SESSION['last_activity'] = time();
+        }
 
         $this->initialiseCart();
         $visitSnapshot = $this->visitCounter->captureVisit();
@@ -135,12 +173,12 @@ final class FrontController
                 if (!isset($_SESSION['user_id'])) $this->redirect('login');
                 $page = new ProfilePage('Мій профіль', $this->db);
                 break;
-                case 'chat':
+            case 'chat':
                 if (!isset($_SESSION['user_id'])) {
                     $this->setFlash('Увійдіть в систему, щоб користуватися чатом.', 'error');
                     $this->redirect('login');
                 }
-                $page = new ChatPage('Freelance Чат');
+                $page = new ChatPage('Freelance Чат', $this->db);
                 break;
             case 'admin':
                 if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'admin') $this->redirect('shop');
@@ -228,13 +266,22 @@ final class FrontController
 
         $user = $this->db->getUserByEmail($email);
         if ($user && password_verify($password, $user['password_hash'])) {
+            session_regenerate_id(true);
             $_SESSION['user_id'] = (int)$user['id'];
             $_SESSION['user_name'] = $user['name'];
             $_SESSION['user_email'] = $user['email'];
             $_SESSION['user_role'] = $user['role'];
 
             if ($remember) {
-                setcookie('remember_user', $email, time() + (86400 * 30), "/");
+                $token = bin2hex(random_bytes(32));
+                $this->db->createRememberToken((int)$user['id'], $token);
+                setcookie('remember_user', $token, [
+                    'expires' => time() + (86400 * 30),
+                    'path' => '/',
+                    'httponly' => true,
+                    'samesite' => 'Lax',
+                    'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'
+                ]);
             }
             $_SESSION['last_activity'] = time();
 
@@ -282,8 +329,13 @@ final class FrontController
 
     private function handleLogout(): void
     {
+        if (isset($_COOKIE['remember_user'])) {
+            $token = (string)$_COOKIE['remember_user'];
+            $this->db->deleteRememberToken($token);
+        }
         unset($_SESSION['user_id'], $_SESSION['user_name'], $_SESSION['user_email'], $_SESSION['user_role'], $_SESSION['last_activity']);
         setcookie('remember_user', '', time() - 3600, '/');
+        session_regenerate_id(true);
         $this->setFlash('Ви вийшли з системи.', 'info');
         $this->redirect('shop');
     }
@@ -440,6 +492,50 @@ final class FrontController
             'merchantInvoiceId' => $orderId,       
             'redirectUrl' => 'http://localhost:8000/index.php?payment=success',            'text' => 'Тестова оплата замовлення №' . $orderId . ' у Freelance Store',
         ];
+
+        if (!function_exists('curl_init')) {
+            $options = [
+                'http' => [
+                    'method' => 'POST',
+                    'header' => [
+                        'Content-Type: application/json',
+                        'X-Token: ' . $monoToken
+                    ],
+                    'content' => json_encode($body),
+                    'timeout' => 10,
+                    'ignore_errors' => true
+                ],
+                'ssl' => [
+                    'verify_peer' => false,
+                    'verify_peer_name' => false,
+                ]
+            ];
+            $options['http']['header'] = implode("\r\n", $options['http']['header']) . "\r\n";
+            $context = stream_context_create($options);
+            $response = @file_get_contents($url, false, $context);
+            if ($response !== false) {
+                $httpCode = 0;
+                if (function_exists('http_get_last_response_headers')) {
+                    $headers = http_get_last_response_headers();
+                } else {
+                    $vars = get_defined_vars();
+                    $headers = $vars['http_response_header'] ?? [];
+                }
+                if (is_array($headers) && !empty($headers)) {
+                    if (preg_match('#HTTP/\d+\.\d+\s+(\d+)#', $headers[0], $matches)) {
+                        $httpCode = (int)$matches[1];
+                    }
+                }
+                if ($httpCode === 200 && $response) {
+                    $data = json_decode($response, true);
+                    return $data['pageUrl'] ?? null;
+                }
+                error_log("Monobank API Error (Fallback). HTTP Code: {$httpCode}, Response: {$response}");
+            } else {
+                error_log("Monobank API Error (Fallback): Request failed entirely.");
+            }
+            return null;
+        }
 
         // Налаштовуємо cURL запит
         $ch = curl_init($url);

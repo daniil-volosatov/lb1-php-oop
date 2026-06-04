@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/FreelanceDB.php';
+use App\Database\FreelanceDB;
+use App\Database\SqliteAdapter;
+
+$adapter = new SqliteAdapter(__DIR__ . '/freelance.sqlite');
+$db = new FreelanceDB($adapter);
+
 $host = '127.0.0.1';
 $port = 8090;
 
@@ -13,6 +20,7 @@ echo "WebSocket server running at {$host}:{$port}\nWaiting for connections...\n"
 $clients = [$socket];
 $clientNames = [];
 $nameToSockets = [];
+$socketToUser = [];
 
 while (true) {
     $read = $clients;
@@ -25,20 +33,60 @@ while (true) {
 
     if (in_array($socket, $read, true)) {
         $newSocket = socket_accept($socket);
-        $clients[] = $newSocket;
         $header = socket_read($newSocket, 1024);
+        
+        $lines = preg_split("/\r\n/", $header);
+        $requestLine = $lines[0] ?? '';
+        $token = '';
+        if (preg_match('/GET\s+\/\?token=([a-f0-9]+)/i', $requestLine, $matches)) {
+            $token = $matches[1];
+        }
+
+        $user = null;
+        if ($token !== '') {
+            try {
+                $user = $db->validateWebSocketToken($token);
+            } catch (Exception $e) {
+                echo "DB Error: " . $e->getMessage() . "\n";
+            }
+        }
+
+        if ($user === null) {
+            echo "Rejecting connection: Invalid token.\n";
+            $response = "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n";
+            @socket_write($newSocket, $response, strlen($response));
+            @socket_close($newSocket);
+            $key = array_search($socket, $read, true);
+            unset($read[$key]);
+            continue;
+        }
+
         performHandshake($header, $newSocket, $host, $port);
         socket_getpeername($newSocket, $ip);
-        echo "New client connected: {$ip}\n";
+        echo "Authenticated client connected: {$user['username']} ({$ip})\n";
+
+        $socketKey = getSocketKey($newSocket);
+        $clients[] = $newSocket;
+        $socketToUser[$socketKey] = $user;
+
+        $senderKeys = getNameKeys($user['username']);
+        $clientNames[$socketKey] = $senderKeys;
+        foreach ($senderKeys as $senderKey) {
+            if ($senderKey !== '') {
+                $nameToSockets[$senderKey][$socketKey] = $newSocket;
+            }
+        }
+
         $key = array_search($socket, $read, true);
         unset($read[$key]);
     }
 
     foreach ($read as $changedSocket) {
         $bytes = @socket_recv($changedSocket, $buffer, 2048, 0);
+        $socketKey = getSocketKey($changedSocket);
+
         if ($bytes === false || $bytes === 0) {
             $key = array_search($changedSocket, $clients, true);
-            $socketKey = getSocketKey($changedSocket);
             $previousKeys = $clientNames[$socketKey] ?? [];
             foreach ($previousKeys as $previousKey) {
                 if ($previousKey === '') {
@@ -49,10 +97,21 @@ while (true) {
                     unset($nameToSockets[$previousKey]);
                 }
             }
-            unset($clients[$key], $clientNames[$socketKey]);
+            unset($clients[$key], $clientNames[$socketKey], $socketToUser[$socketKey]);
             socket_close($changedSocket);
             continue;
         }
+
+        if (!isset($socketToUser[$socketKey])) {
+            $key = array_search($changedSocket, $clients, true);
+            unset($clients[$key]);
+            @socket_close($changedSocket);
+            continue;
+        }
+
+        $currentUser = $socketToUser[$socketKey];
+        $sender = $currentUser['username'];
+        $role = $currentUser['role'];
 
         $message = unmask($buffer);
         $data = json_decode($message, true);
@@ -61,25 +120,39 @@ while (true) {
         }
 
         $type = $data['type'] ?? 'chat';
-        $sender = trim((string) ($data['sender'] ?? ''));
-        $senderKeys = getNameKeys($sender);
-        $senderKey = $senderKeys[0] ?? '';
-        $recipient = trim((string) ($data['recipient'] ?? ''));
-        $recipientKeys = getNameKeys($recipient);
-        $recipientKey = $recipientKeys[0] ?? '';
-
-        // Handle registration before validating message content.
-        if (($type === 'register' || $type === 'presence') && !empty($senderKeys)) {
-            updateClientName($changedSocket, $senderKeys, $clientNames, $nameToSockets);
+        
+        if ($type === 'register' || $type === 'presence') {
             continue;
         }
 
-        if (!empty($senderKeys)) {
-            updateClientName($changedSocket, $senderKeys, $clientNames, $nameToSockets);
+        $recipient = trim((string) ($data['recipient'] ?? ''));
+        $recipientKeys = getNameKeys($recipient);
+
+        if ($type === 'notification') {
+            if ($role !== 'admin') {
+                $errorPayload = mask(json_encode([
+                    'sender' => 'system',
+                    'msg' => 'Тільки адміністратори можуть надсилати сповіщення.',
+                    'date' => date('Y-m-d H:i:s'),
+                    'type' => 'error',
+                ]));
+                sendDirectMessage($errorPayload, [$changedSocket]);
+                continue;
+            }
+
+            $payload = [
+                'sender' => $sender,
+                'msg' => trim((string) ($data['msg'] ?? '')),
+                'date' => date('Y-m-d H:i:s'),
+                'type' => 'notification',
+            ];
+            $response = mask(json_encode($payload));
+            broadcastMessage($response, $clients, $socket);
+            continue;
         }
 
         $text = trim((string) ($data['msg'] ?? ''));
-        if (empty($senderKeys) || $text === '') {
+        if ($text === '') {
             continue;
         }
 
@@ -90,14 +163,7 @@ while (true) {
             'type' => $type,
         ];
 
-        if ($type === 'notification') {
-            $response = mask(json_encode($payload));
-            broadcastMessage($response, $clients, $socket);
-            continue;
-        }
-
         if (empty($recipientKeys)) {
-            // Enforce one-to-one messaging by requiring a recipient.
             $errorPayload = mask(json_encode([
                 'sender' => 'system',
                 'msg' => 'Оберіть отримувача для приватного чату.',
@@ -110,19 +176,19 @@ while (true) {
 
         $payload['recipient'] = $recipient;
         $response = mask(json_encode($payload));
-        $targetsByKey = [getSocketKey($changedSocket) => $changedSocket];
+        $targetsByKey = [$socketKey => $changedSocket];
         $recipientMatched = false;
 
         foreach ($recipientKeys as $lookupKey) {
             if (!isset($nameToSockets[$lookupKey])) {
                 continue;
             }
-            foreach ($nameToSockets[$lookupKey] as $socketKey => $targetSocket) {
+            foreach ($nameToSockets[$lookupKey] as $targetKey => $targetSocket) {
                 if ($targetSocket === $changedSocket) {
                     continue;
                 }
                 $recipientMatched = true;
-                $targetsByKey[$socketKey] = $targetSocket;
+                $targetsByKey[$targetKey] = $targetSocket;
             }
         }
 

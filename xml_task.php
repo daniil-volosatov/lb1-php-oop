@@ -1,10 +1,23 @@
 <?php
 declare(strict_types=1);
 
+session_start();
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
 $xmlFile = 'freelancers.xml';
 
 // 1. ОБРОБКА ФОРМИ: Якщо користувач відправив дані
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['name']) && !empty($_POST['message'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $postedToken = $_POST['csrf_token'] ?? '';
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $postedToken)) {
+        http_response_code(403);
+        die('Помилка: Недійсний CSRF-токен.');
+    }
+
+    if (!empty($_POST['name']) && !empty($_POST['message'])) {
     
     $dom = new DOMDocument('1.0', 'utf-8');
     $dom->formatOutput = true;
@@ -37,6 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['name']) && !empty($_
     // Оновлюємо сторінку, щоб уникнути дублювання при натисканні F5
     header("Location: xml_task.php");
     exit;
+    }
 }
 
 // Якщо файлу ще взагалі немає, створюємо порожній базовий файл
@@ -64,6 +78,7 @@ if (!file_exists($xmlFile)) {
         <p style="color: #666; font-size: 0.9rem;">Введіть дані, і вони будуть збережені у файл <b>freelancers.xml</b>.</p>
         
         <form method="POST" action="xml_task.php" style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 40px; border: 1px solid #eee; padding: 20px; border-radius: 6px; background: #fafafa;">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token'] ?? '', ENT_QUOTES, 'UTF-8'); ?>">
             <div>
                 <label style="font-weight: bold; font-size: 0.9rem;">Ваше ім'я:</label><br>
                 <input type="text" name="name" placeholder="Наприклад: Нікіта" required style="width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px;">

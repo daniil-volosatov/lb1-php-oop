@@ -3,6 +3,9 @@ declare(strict_types=1);
 
 namespace App\Database;
 
+require_once __DIR__ . '/EncryptionService.php';
+
+use App\Security\EncryptionService;
 use PDO;
 use PDOException;
 use PDOStatement;
@@ -111,6 +114,13 @@ interface DatabaseInterface
     public function createOrder(int $userId, float $totalPrice, array $cartItems): bool;
     public function getAllOrders(): array;
     public function getOrderItems(int $orderId): array;
+
+    public function createWebSocketToken(int $userId, string $username, string $role): string;
+    public function validateWebSocketToken(string $token): ?array;
+    public function createRememberToken(int $userId, string $token): bool;
+    public function validateRememberToken(string $token): ?array;
+    public function deleteRememberToken(string $token): void;
+    public function clearUserRememberTokens(int $userId): void;
     
     public function closeConnection(): void;
 }
@@ -551,6 +561,22 @@ final class FreelanceDB implements DatabaseInterface
             price REAL NOT NULL,
             FOREIGN KEY (order_id) REFERENCES orders(id)
         )');
+
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS remember_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )');
+
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS websocket_tokens (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL,
+            expires_at INTEGER NOT NULL
+        )');
     }
 
     private function seedData(): void
@@ -578,12 +604,145 @@ final class FreelanceDB implements DatabaseInterface
         if ((int) $adminStmt->fetchColumn() === 0) {
             $insertAdmin = $this->pdo->prepare('INSERT INTO users (name, email, password_hash, role, created_at) VALUES (:name, :email, :password_hash, :role, :created_at)');
             $insertAdmin->execute([
-                ':name' => 'Admin',
-                ':email' => 'admin@store.com',
+                ':name' => EncryptionService::encrypt('Admin'),
+                ':email' => EncryptionService::encrypt('admin@store.com', true),
                 ':password_hash' => password_hash('12345678', PASSWORD_DEFAULT),
                 ':role' => 'admin',
                 ':created_at' => date('Y-m-d H:i:s')
             ]);
+        }
+    }
+
+    public function createWebSocketToken(int $userId, string $username, string $role): string
+    {
+        $this->ensureConnection();
+        $token = bin2hex(random_bytes(16));
+        $expiresAt = time() + 60;
+
+        try {
+            $this->pdo->beginTransaction();
+            $statement = $this->pdo->prepare(
+                'INSERT INTO websocket_tokens (token, user_id, username, role, expires_at)
+                 VALUES (:token, :user_id, :username, :role, :expires_at)'
+            );
+            $statement->execute([
+                ':token' => $token,
+                ':user_id' => $userId,
+                ':username' => $username,
+                ':role' => $role,
+                ':expires_at' => $expiresAt
+            ]);
+            $this->pdo->commit();
+            return $token;
+        } catch (PDOException $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to create WebSocket token.');
+        }
+    }
+
+    public function validateWebSocketToken(string $token): ?array
+    {
+        $this->ensureConnection();
+        try {
+            $this->pdo->beginTransaction();
+            $this->pdo->exec('DELETE FROM websocket_tokens WHERE expires_at < ' . time());
+
+            $statement = $this->pdo->prepare('SELECT user_id, username, role FROM websocket_tokens WHERE token = :token LIMIT 1');
+            $statement->execute([':token' => $token]);
+            $result = $statement->fetch();
+
+            if ($result !== false) {
+                $deleteStmt = $this->pdo->prepare('DELETE FROM websocket_tokens WHERE token = :token');
+                $deleteStmt->execute([':token' => $token]);
+            }
+            $this->pdo->commit();
+            return $result === false ? null : $result;
+        } catch (PDOException $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $this->wrapPdoException($exception, null, 'Unable to validate WebSocket token.');
+        }
+    }
+
+    public function createRememberToken(int $userId, string $token): bool
+    {
+        $this->ensureConnection();
+        $hash = hash('sha256', $token);
+        $expires = time() + (86400 * 30);
+        try {
+            $this->pdo->beginTransaction();
+            $statement = $this->pdo->prepare('INSERT INTO remember_tokens (user_id, token_hash, expires_at) VALUES (:user_id, :token_hash, :expires_at)');
+            $statement->execute([
+                ':user_id' => $userId,
+                ':token_hash' => $hash,
+                ':expires_at' => $expires
+            ]);
+            $this->pdo->commit();
+            return true;
+        } catch (PDOException $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to save remember token.');
+        }
+    }
+
+    public function validateRememberToken(string $token): ?array
+    {
+        $this->ensureConnection();
+        $hash = hash('sha256', $token);
+        $now = time();
+        try {
+            $statement = $this->pdo->prepare('
+                SELECT u.* FROM users u
+                JOIN remember_tokens r ON u.id = r.user_id
+                WHERE r.token_hash = :token_hash AND r.expires_at > :now
+                LIMIT 1
+            ');
+            $statement->execute([
+                ':token_hash' => $hash,
+                ':now' => $now
+            ]);
+            $result = $statement->fetch();
+            return $result === false ? null : $result;
+        } catch (PDOException $exception) {
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to validate remember token.');
+        }
+    }
+
+    public function deleteRememberToken(string $token): void
+    {
+        $this->ensureConnection();
+        $hash = hash('sha256', $token);
+        try {
+            $this->pdo->beginTransaction();
+            $statement = $this->pdo->prepare('DELETE FROM remember_tokens WHERE token_hash = :token_hash');
+            $statement->execute([':token_hash' => $hash]);
+            $this->pdo->commit();
+        } catch (PDOException $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to delete remember token.');
+        }
+    }
+
+    public function clearUserRememberTokens(int $userId): void
+    {
+        $this->ensureConnection();
+        try {
+            $this->pdo->beginTransaction();
+            $statement = $this->pdo->prepare('DELETE FROM remember_tokens WHERE user_id = :user_id');
+            $statement->execute([':user_id' => $userId]);
+            $this->pdo->commit();
+        } catch (PDOException $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $this->wrapPdoException($exception, $statement ?? null, 'Unable to clear user remember tokens.');
         }
     }
 
@@ -725,6 +884,433 @@ final class LoggerDecorator implements DatabaseInterface
     public function getOrderItems(int $orderId): array
     {
         return $this->db->getOrderItems($orderId);
+    }
+
+    public function createWebSocketToken(int $userId, string $username, string $role): string
+    {
+        return $this->db->createWebSocketToken($userId, $username, $role);
+    }
+
+    public function validateWebSocketToken(string $token): ?array
+    {
+        return $this->db->validateWebSocketToken($token);
+    }
+
+    public function createRememberToken(int $userId, string $token): bool
+    {
+        return $this->db->createRememberToken($userId, $token);
+    }
+
+    public function validateRememberToken(string $token): ?array
+    {
+        return $this->db->validateRememberToken($token);
+    }
+
+    public function deleteRememberToken(string $token): void
+    {
+        $this->db->deleteRememberToken($token);
+    }
+
+    public function clearUserRememberTokens(int $userId): void
+    {
+        $this->db->clearUserRememberTokens($userId);
+    }
+
+    public function closeConnection(): void
+    {
+        $this->db->closeConnection();
+    }
+}
+
+final class EncryptingDecorator implements DatabaseInterface
+{
+    private DatabaseInterface $db;
+
+    public function __construct(DatabaseInterface $db)
+    {
+        $this->db = $db;
+    }
+
+    public function getAllServices(): array
+    {
+        return $this->db->getAllServices();
+    }
+
+    public function searchServices(string $query): array
+    {
+        return $this->db->searchServices($query);
+    }
+
+    public function getServiceById(int $id): ?array
+    {
+        return $this->db->getServiceById($id);
+    }
+
+    public function addService(string $name, int $price): bool
+    {
+        return $this->db->addService($name, $price);
+    }
+
+    public function deleteService(int $id): bool
+    {
+        return $this->db->deleteService($id);
+    }
+
+    public function addFeedback(string $name, string $email, string $message): bool
+    {
+        $encName = EncryptionService::encrypt($name);
+        $encEmail = EncryptionService::encrypt($email);
+        $encMessage = EncryptionService::encrypt($message);
+        return $this->db->addFeedback($encName, $encEmail, $encMessage);
+    }
+
+    public function recordVisit(string $visitorId, bool $isNewSession): void
+    {
+        $this->db->recordVisit($visitorId, $isNewSession);
+    }
+
+    public function getVisitStats(): array
+    {
+        return $this->db->getVisitStats();
+    }
+
+    public function getVisitorStats(string $visitorId): array
+    {
+        return $this->db->getVisitorStats($visitorId);
+    }
+
+    public function createUser(string $name, string $email, string $passwordHash, string $role = 'user'): bool
+    {
+        $encName = EncryptionService::encrypt($name);
+        $encEmail = EncryptionService::encrypt($email, true);
+        return $this->db->createUser($encName, $encEmail, $passwordHash, $role);
+    }
+
+    public function getUserByEmail(string $email): ?array
+    {
+        $encEmail = EncryptionService::encrypt($email, true);
+        $user = $this->db->getUserByEmail($encEmail);
+        if ($user) {
+            $user['name'] = EncryptionService::decrypt($user['name']);
+            $user['email'] = EncryptionService::decrypt($user['email'], true);
+        }
+        return $user;
+    }
+
+    public function updateUserAvatar(int $userId, string $avatarPath): bool
+    {
+        return $this->db->updateUserAvatar($userId, $avatarPath);
+    }
+
+    public function addUserGalleryImage(int $userId, string $imagePath): bool
+    {
+        return $this->db->addUserGalleryImage($userId, $imagePath);
+    }
+
+    public function getUserGalleryImages(int $userId): array
+    {
+        return $this->db->getUserGalleryImages($userId);
+    }
+
+    public function createOrder(int $userId, float $totalPrice, array $cartItems): bool
+    {
+        return $this->db->createOrder($userId, $totalPrice, $cartItems);
+    }
+
+    public function getAllOrders(): array
+    {
+        $orders = $this->db->getAllOrders();
+        foreach ($orders as &$order) {
+            if (isset($order['user_name'])) {
+                $order['user_name'] = EncryptionService::decrypt($order['user_name']);
+            }
+            if (isset($order['user_email'])) {
+                $order['user_email'] = EncryptionService::decrypt($order['user_email'], true);
+            }
+        }
+        return $orders;
+    }
+
+    public function getOrderItems(int $orderId): array
+    {
+        return $this->db->getOrderItems($orderId);
+    }
+
+    public function createWebSocketToken(int $userId, string $username, string $role): string
+    {
+        return $this->db->createWebSocketToken($userId, $username, $role);
+    }
+
+    public function validateWebSocketToken(string $token): ?array
+    {
+        return $this->db->validateWebSocketToken($token);
+    }
+
+    public function createRememberToken(int $userId, string $token): bool
+    {
+        return $this->db->createRememberToken($userId, $token);
+    }
+
+    public function validateRememberToken(string $token): ?array
+    {
+        $user = $this->db->validateRememberToken($token);
+        if ($user) {
+            $user['name'] = EncryptionService::decrypt($user['name']);
+            $user['email'] = EncryptionService::decrypt($user['email'], true);
+        }
+        return $user;
+    }
+
+    public function deleteRememberToken(string $token): void
+    {
+        $this->db->deleteRememberToken($token);
+    }
+
+    public function clearUserRememberTokens(int $userId): void
+    {
+        $this->db->clearUserRememberTokens($userId);
+    }
+
+    public function closeConnection(): void
+    {
+        $this->db->closeConnection();
+    }
+}
+
+final class CachingDecorator implements DatabaseInterface
+{
+    private DatabaseInterface $db;
+    private string $cacheDir;
+    private int $ttl;
+
+    public function __construct(DatabaseInterface $db, string $cacheDir = __DIR__ . '/cache', int $ttl = 300)
+    {
+        $this->db = $db;
+        $this->cacheDir = $cacheDir;
+        $this->ttl = $ttl;
+
+        if (!is_dir($this->cacheDir)) {
+            mkdir($this->cacheDir, 0777, true);
+            file_put_contents($this->cacheDir . '/.htaccess', 'Deny from all');
+        }
+    }
+
+    private function getCacheKey(string $method, array $args): string
+    {
+        return md5($method . serialize($args));
+    }
+
+    private function get(string $method, array $args)
+    {
+        $key = $this->getCacheKey($method, $args);
+        $file = $this->cacheDir . '/' . $key . '.cache';
+
+        if (file_exists($file) && (time() - filemtime($file)) < $this->ttl) {
+            $encrypted = file_get_contents($file);
+            if ($encrypted !== false) {
+                $decrypted = EncryptionService::decrypt($encrypted);
+                $unserialized = @unserialize($decrypted);
+                if ($unserialized !== false || $decrypted === serialize(false)) {
+                    return $unserialized;
+                }
+            }
+        }
+        return null;
+    }
+
+    private function set(string $method, array $args, $value): void
+    {
+        $key = $this->getCacheKey($method, $args);
+        $file = $this->cacheDir . '/' . $key . '.cache';
+        $serialized = serialize($value);
+        $encrypted = EncryptionService::encrypt($serialized);
+        file_put_contents($file, $encrypted);
+    }
+
+    private function clearCache(): void
+    {
+        if (!is_dir($this->cacheDir)) {
+            return;
+        }
+        $files = glob($this->cacheDir . '/*.cache');
+        if (is_array($files)) {
+            foreach ($files as $file) {
+                if (is_file($file)) {
+                    @unlink($file);
+                }
+            }
+        }
+    }
+
+    public function getAllServices(): array
+    {
+        $cached = $this->get(__FUNCTION__, []);
+        if ($cached !== null) {
+            return $cached;
+        }
+        $result = $this->db->getAllServices();
+        $this->set(__FUNCTION__, [], $result);
+        return $result;
+    }
+
+    public function searchServices(string $query): array
+    {
+        $cached = $this->get(__FUNCTION__, [$query]);
+        if ($cached !== null) {
+            return $cached;
+        }
+        $result = $this->db->searchServices($query);
+        $this->set(__FUNCTION__, [$query], $result);
+        return $result;
+    }
+
+    public function getServiceById(int $id): ?array
+    {
+        $cached = $this->get(__FUNCTION__, [$id]);
+        if ($cached !== null) {
+            return $cached;
+        }
+        $result = $this->db->getServiceById($id);
+        $this->set(__FUNCTION__, [$id], $result);
+        return $result;
+    }
+
+    public function addService(string $name, int $price): bool
+    {
+        $res = $this->db->addService($name, $price);
+        $this->clearCache();
+        return $res;
+    }
+
+    public function deleteService(int $id): bool
+    {
+        $res = $this->db->deleteService($id);
+        $this->clearCache();
+        return $res;
+    }
+
+    public function addFeedback(string $name, string $email, string $message): bool
+    {
+        $res = $this->db->addFeedback($name, $email, $message);
+        $this->clearCache();
+        return $res;
+    }
+
+    public function recordVisit(string $visitorId, bool $isNewSession): void
+    {
+        $this->db->recordVisit($visitorId, $isNewSession);
+    }
+
+    public function getVisitStats(): array
+    {
+        return $this->db->getVisitStats();
+    }
+
+    public function getVisitorStats(string $visitorId): array
+    {
+        return $this->db->getVisitorStats($visitorId);
+    }
+
+    public function createUser(string $name, string $email, string $passwordHash, string $role = 'user'): bool
+    {
+        $res = $this->db->createUser($name, $email, $passwordHash, $role);
+        $this->clearCache();
+        return $res;
+    }
+
+    public function getUserByEmail(string $email): ?array
+    {
+        $cached = $this->get(__FUNCTION__, [$email]);
+        if ($cached !== null) {
+            return $cached;
+        }
+        $result = $this->db->getUserByEmail($email);
+        $this->set(__FUNCTION__, [$email], $result);
+        return $result;
+    }
+
+    public function updateUserAvatar(int $userId, string $avatarPath): bool
+    {
+        $res = $this->db->updateUserAvatar($userId, $avatarPath);
+        $this->clearCache();
+        return $res;
+    }
+
+    public function addUserGalleryImage(int $userId, string $imagePath): bool
+    {
+        $res = $this->db->addUserGalleryImage($userId, $imagePath);
+        $this->clearCache();
+        return $res;
+    }
+
+    public function getUserGalleryImages(int $userId): array
+    {
+        $cached = $this->get(__FUNCTION__, [$userId]);
+        if ($cached !== null) {
+            return $cached;
+        }
+        $result = $this->db->getUserGalleryImages($userId);
+        $this->set(__FUNCTION__, [$userId], $result);
+        return $result;
+    }
+
+    public function createOrder(int $userId, float $totalPrice, array $cartItems): bool
+    {
+        $res = $this->db->createOrder($userId, $totalPrice, $cartItems);
+        $this->clearCache();
+        return $res;
+    }
+
+    public function getAllOrders(): array
+    {
+        $cached = $this->get(__FUNCTION__, []);
+        if ($cached !== null) {
+            return $cached;
+        }
+        $result = $this->db->getAllOrders();
+        $this->set(__FUNCTION__, [], $result);
+        return $result;
+    }
+
+    public function getOrderItems(int $orderId): array
+    {
+        $cached = $this->get(__FUNCTION__, [$orderId]);
+        if ($cached !== null) {
+            return $cached;
+        }
+        $result = $this->db->getOrderItems($orderId);
+        $this->set(__FUNCTION__, [$orderId], $result);
+        return $result;
+    }
+
+    public function createWebSocketToken(int $userId, string $username, string $role): string
+    {
+        return $this->db->createWebSocketToken($userId, $username, $role);
+    }
+
+    public function validateWebSocketToken(string $token): ?array
+    {
+        return $this->db->validateWebSocketToken($token);
+    }
+
+    public function createRememberToken(int $userId, string $token): bool
+    {
+        return $this->db->createRememberToken($userId, $token);
+    }
+
+    public function validateRememberToken(string $token): ?array
+    {
+        return $this->db->validateRememberToken($token);
+    }
+
+    public function deleteRememberToken(string $token): void
+    {
+        $this->db->deleteRememberToken($token);
+    }
+
+    public function clearUserRememberTokens(int $userId): void
+    {
+        $this->db->clearUserRememberTokens($userId);
     }
 
     public function closeConnection(): void

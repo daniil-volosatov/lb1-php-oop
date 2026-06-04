@@ -4,3 +4,5 @@ __MACOSX/
 *.sqlite
 *.db
 Tasks/
+.enc_key
+cache/*.cache
